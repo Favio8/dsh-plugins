@@ -20,3 +20,6 @@ PRD*.md
 # Á≥ªÁªüÊñá‰ª∂
 Thumbs.db
 .DS_Store
+
+# ¡Ÿ ±ΩÿÕº
+.tmp-*
