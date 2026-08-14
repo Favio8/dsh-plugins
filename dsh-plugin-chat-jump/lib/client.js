@@ -67,6 +67,7 @@ function ChatJumpRail() {
 	react.useEffect(() => {
 		let container = null;
 		let containerObserver = null;
+		let containerRO = null;
 		let rootObserver = null;
 		let raf = 0;
 		const collectDots = () => {
@@ -77,13 +78,19 @@ function ChatJumpRail() {
 				label: (el.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 40)
 			}));
 		};
-		/** 轨道水平位置 = 对话内容列起点（容器 padding 或首条消息节点左偏移）。 */
+		/**
+		* 轨道水平位置 = 对话正文列起点。
+		* 取所有 flow 节点中最靠左的左偏移（首个节点可能是居中元素，
+		* 例如 compaction 摘要条，会带出巨大假偏移，必须取最小值）。
+		*/
 		const contentInset = () => {
 			if (container === null) return 24;
-			const flowEl = container.querySelector("[data-chat-flow-key]");
-			if (flowEl !== null) {
-				const inset = flowEl.getBoundingClientRect().left - container.getBoundingClientRect().left;
-				if (inset > 0) return inset;
+			const flows = Array.from(container.querySelectorAll("[data-chat-flow-key]"));
+			if (flows.length > 0) {
+				const cLeft = container.getBoundingClientRect().left;
+				let min = Number.POSITIVE_INFINITY;
+				for (const el of flows) min = Math.min(min, el.getBoundingClientRect().left - cLeft);
+				if (Number.isFinite(min) && min > 0) return min;
 			}
 			const cs = getComputedStyle(container);
 			return Number.parseFloat(cs.paddingLeft) || 24;
@@ -118,6 +125,8 @@ function ChatJumpRail() {
 				childList: true,
 				subtree: true
 			});
+			containerRO = new ResizeObserver(refresh);
+			containerRO.observe(c);
 			c.addEventListener("scroll", computeActive, { passive: true });
 			window.addEventListener("resize", refresh);
 			refresh();
@@ -125,6 +134,8 @@ function ChatJumpRail() {
 		const detach = () => {
 			containerObserver?.disconnect();
 			containerObserver = null;
+			containerRO?.disconnect();
+			containerRO = null;
 			if (container !== null) container.removeEventListener("scroll", computeActive);
 			window.removeEventListener("resize", refresh);
 			container = null;
@@ -139,12 +150,14 @@ function ChatJumpRail() {
 				detach();
 				attach(c);
 			} else if (c === null && container !== null) detach();
+			else refresh();
 		};
 		find();
 		rootObserver = new MutationObserver(find);
 		rootObserver.observe(document.body, {
 			childList: true,
-			subtree: true
+			subtree: true,
+			attributes: true
 		});
 		return () => {
 			detach();

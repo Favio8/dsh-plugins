@@ -62,6 +62,7 @@ export function ChatJumpRail(): React.ReactElement | null {
   React.useEffect(() => {
     let container: HTMLElement | null = null
     let containerObserver: MutationObserver | null = null
+    let containerRO: ResizeObserver | null = null
     let rootObserver: MutationObserver | null = null
     let raf = 0
 
@@ -74,13 +75,21 @@ export function ChatJumpRail(): React.ReactElement | null {
       }))
     }
 
-    /** 轨道水平位置 = 对话内容列起点（容器 padding 或首条消息节点左偏移）。 */
+    /**
+     * 轨道水平位置 = 对话正文列起点。
+     * 取所有 flow 节点中最靠左的左偏移（首个节点可能是居中元素，
+     * 例如 compaction 摘要条，会带出巨大假偏移，必须取最小值）。
+     */
     const contentInset = (): number => {
       if (container === null) return 24
-      const flowEl = container.querySelector<HTMLElement>('[data-chat-flow-key]')
-      if (flowEl !== null) {
-        const inset = flowEl.getBoundingClientRect().left - container.getBoundingClientRect().left
-        if (inset > 0) return inset
+      const flows = Array.from(container.querySelectorAll<HTMLElement>('[data-chat-flow-key]'))
+      if (flows.length > 0) {
+        const cLeft = container.getBoundingClientRect().left
+        let min = Number.POSITIVE_INFINITY
+        for (const el of flows) {
+          min = Math.min(min, el.getBoundingClientRect().left - cLeft)
+        }
+        if (Number.isFinite(min) && min > 0) return min
       }
       const cs = getComputedStyle(container)
       return Number.parseFloat(cs.paddingLeft) || 24
@@ -116,6 +125,9 @@ export function ChatJumpRail(): React.ReactElement | null {
       containerRef.current = c
       containerObserver = new MutationObserver(refresh)
       containerObserver.observe(c, { childList: true, subtree: true })
+      // 侧边栏收回/展开会改变容器尺寸与位置 → ResizeObserver 同步
+      containerRO = new ResizeObserver(refresh)
+      containerRO.observe(c)
       c.addEventListener('scroll', computeActive, { passive: true })
       window.addEventListener('resize', refresh)
       refresh()
@@ -124,6 +136,8 @@ export function ChatJumpRail(): React.ReactElement | null {
     const detach = (): void => {
       containerObserver?.disconnect()
       containerObserver = null
+      containerRO?.disconnect()
+      containerRO = null
       if (container !== null) container.removeEventListener('scroll', computeActive)
       window.removeEventListener('resize', refresh)
       container = null
@@ -140,12 +154,15 @@ export function ChatJumpRail(): React.ReactElement | null {
         attach(c)
       } else if (c === null && container !== null) {
         detach()
+      } else {
+        // 容器未变但布局变了（如侧边栏折叠改的是 body 类名）→ 刷新位置
+        refresh()
       }
     }
 
     find()
     rootObserver = new MutationObserver(find)
-    rootObserver.observe(document.body, { childList: true, subtree: true })
+    rootObserver.observe(document.body, { childList: true, subtree: true, attributes: true })
 
     return () => {
       detach()
