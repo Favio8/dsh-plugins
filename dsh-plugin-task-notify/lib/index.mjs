@@ -2,6 +2,104 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+//#region src/sound.ts
+const SOUND_TYPES = [
+	"apple",
+	"ding",
+	"double",
+	"system"
+];
+const SAMPLE_RATE = 44100;
+/** 正弦 + attack 防爆音 + 指数衰减包络。 */
+function synthTone(freq, durationSec, volume) {
+	const n = Math.max(1, Math.round(durationSec * SAMPLE_RATE));
+	const out = new Float32Array(n);
+	const attack = Math.min(.008, durationSec / 6);
+	for (let i = 0; i < n; i++) {
+		const t = i / SAMPLE_RATE;
+		const atk = t < attack ? t / attack : 1;
+		const env = Math.exp(-4.2 * (t / durationSec));
+		out[i] = Math.sin(2 * Math.PI * freq * t) * atk * env * volume;
+	}
+	return out;
+}
+function mixTones(tones) {
+	const total = Math.round(Math.max(...tones.map((t) => t.startSec + t.durationSec)) * SAMPLE_RATE);
+	const out = new Float32Array(total);
+	for (const tone of tones) {
+		const seg = synthTone(tone.freq, tone.durationSec, tone.volume ?? .5);
+		const offset = Math.round(tone.startSec * SAMPLE_RATE);
+		for (let i = 0; i < seg.length && offset + i < total; i++) out[offset + i] += seg[i];
+	}
+	for (let i = 0; i < out.length; i++) if (out[i] > 1) out[i] = 1;
+	else if (out[i] < -1) out[i] = -1;
+	return out;
+}
+function buildWav(samples) {
+	const dataLen = samples.length * 2;
+	const buf = Buffer.alloc(44 + dataLen);
+	buf.write("RIFF", 0);
+	buf.writeUInt32LE(36 + dataLen, 4);
+	buf.write("WAVE", 8);
+	buf.write("fmt ", 12);
+	buf.writeUInt32LE(16, 16);
+	buf.writeUInt16LE(1, 20);
+	buf.writeUInt16LE(1, 22);
+	buf.writeUInt32LE(SAMPLE_RATE, 24);
+	buf.writeUInt32LE(SAMPLE_RATE * 2, 28);
+	buf.writeUInt16LE(2, 32);
+	buf.writeUInt16LE(16, 34);
+	buf.write("data", 36);
+	buf.writeUInt32LE(dataLen, 40);
+	for (let i = 0; i < samples.length; i++) {
+		const v = Math.max(-1, Math.min(1, samples[i]));
+		buf.writeInt16LE(Math.round(v * 32767), 44 + i * 2);
+	}
+	return buf;
+}
+/** 合成指定音色（system 无合成产物）。volumePercent 0..100 为主音量增益。 */
+function synthSound(type, volumePercent) {
+	const gain = Math.max(0, Math.min(100, volumePercent)) / 100;
+	const applyGain = (samples) => {
+		const out = new Float32Array(samples.length);
+		for (let i = 0; i < samples.length; i++) out[i] = samples[i] * gain;
+		return out;
+	};
+	switch (type) {
+		case "apple": return buildWav(applyGain(mixTones([
+			{
+				freq: 523.25,
+				durationSec: .4,
+				startSec: 0
+			},
+			{
+				freq: 659.25,
+				durationSec: .42,
+				startSec: .18
+			},
+			{
+				freq: 783.99,
+				durationSec: .5,
+				startSec: .36
+			}
+		])));
+		case "ding": return buildWav(applyGain(mixTones([{
+			freq: 783.99,
+			durationSec: .7,
+			startSec: 0
+		}])));
+		case "double": return buildWav(applyGain(mixTones([{
+			freq: 660,
+			durationSec: .15,
+			startSec: 0
+		}, {
+			freq: 660,
+			durationSec: .18,
+			startSec: .25
+		}])));
+	}
+}
+//#endregion
 //#region src/index.ts
 const name = "task-notify";
 const inject = ["webServer"];
@@ -12,6 +110,8 @@ const inject = ["webServer"];
 * PowerShell 弹**飞书式置顶卡片**（自定义无边框窗口，不经过 Windows 通知
 * 管道，因此系统通知总开关关闭时依然显示）——**与浏览器页面是否打开无关**。
 * 卡片样式（主题/强调色/位置/时长/字号/字体）由配置驱动，可在设置页调整。
+* 提示音：任务完成时播放可选提示音（默认苹果三全音，宿主合成 WAV，
+* 经 SoundPlayer 播放；系统通知/页面是否打开均不影响），可开关、可选音色。
 * 另注册 HTTP 桥，供客户端设置行/设置页调用：
 *   GET  /task-notify/config       读取完整配置
 *   POST /task-notify/config       局部更新（{ "desktop": ..., "accent": ... }）
@@ -59,7 +159,10 @@ const DEFAULTS = {
 	position: "br",
 	durationSec: 6,
 	fontSize: 12,
-	fontFamily: "Microsoft YaHei UI"
+	fontFamily: "Microsoft YaHei UI",
+	sound: true,
+	soundType: "apple",
+	volume: 80
 };
 function isOneOf(value, list) {
 	return list.includes(value);
@@ -73,18 +176,53 @@ function sanitizeConfig(raw) {
 		position: isOneOf(src.position, POSITIONS) ? src.position : DEFAULTS.position,
 		durationSec: isOneOf(src.durationSec, DURATIONS) ? src.durationSec : DEFAULTS.durationSec,
 		fontSize: isOneOf(src.fontSize, FONT_SIZES) ? src.fontSize : DEFAULTS.fontSize,
-		fontFamily: isOneOf(src.fontFamily, FONT_FAMILIES) ? src.fontFamily : DEFAULTS.fontFamily
+		fontFamily: isOneOf(src.fontFamily, FONT_FAMILIES) ? src.fontFamily : DEFAULTS.fontFamily,
+		sound: typeof src.sound === "boolean" ? src.sound : DEFAULTS.sound,
+		soundType: isOneOf(src.soundType, SOUND_TYPES) ? src.soundType : DEFAULTS.soundType,
+		volume: typeof src.volume === "number" && Number.isFinite(src.volume) ? Math.max(0, Math.min(100, Math.round(src.volume))) : DEFAULTS.volume
 	};
 }
 const DSH_HOME = process.env.DSH_HOME ?? join(homedir(), ".dsh");
 const CONFIG_DIR = join(DSH_HOME, "plugins");
 const CONFIG_PATH = join(CONFIG_DIR, "task-notify.json");
 const SCRIPT_PATH = join(tmpdir(), "dsh-task-notify-popup.ps1");
+const SOUND_DIR = join(tmpdir(), "dsh-task-notify-sound");
 const WEB_URL = "http://127.0.0.1:3080";
 const DEBOUNCE_MS = 2e3;
 /** 会话标题过长时截断，避免卡片溢出。 */
 function truncateTitle(title, max = 26) {
 	return title.length > max ? `${title.slice(0, max)}…` : title;
+}
+/** 阻塞等待用户输入/审批的工具：出现 tool/call 即代表等待开始。 */
+const BLOCKING_TOOLS = /* @__PURE__ */ new Set(["ask_user_question", "exit_plan_mode"]);
+let lastWaitNotifyAt = 0;
+/** 从 tool/call 参数里提取可读的等待说明（问题文本 / 计划标题）。 */
+function waitBody(name, argsRaw) {
+	try {
+		const args = argsRaw ? JSON.parse(argsRaw) : {};
+		if (name === "ask_user_question") {
+			const first = (Array.isArray(args.questions) ? args.questions : [])[0];
+			const text = first?.header ?? first?.question;
+			if (typeof text === "string" && text !== "") return truncateTitle(text, 40);
+			return "智能体向你提出了一个问题，需要你回答";
+		}
+		if (name === "exit_plan_mode") {
+			const plan = typeof args.plan === "string" ? args.plan : "";
+			const match = /^#{1,6}\s+(.+?)\s*$/m.exec(plan);
+			if (match?.[1] !== void 0) return `计划「${truncateTitle(match[1], 26)}」等待审批`;
+			return "智能体提交了计划，等待你审批";
+		}
+	} catch {}
+	return name === "ask_user_question" ? "智能体向你提出了一个问题，需要你回答" : "智能体提交了计划，等待你审批";
+}
+/** 等待输入/审批提醒：与完成通知共用通道（卡片+声音），独立防抖。 */
+function fireWaitNotify(title, body) {
+	if (!config.desktop && !config.sound) return;
+	const now = Date.now();
+	if (now - lastWaitNotifyAt < DEBOUNCE_MS) return;
+	lastWaitNotifyAt = now;
+	if (config.desktop) showPopup(title, body, WEB_URL, config.sound, config.soundType);
+	else if (config.sound) playSoundOnly(config.soundType);
 }
 /**
 * 飞书式弹窗：自定义无边框置顶卡片（WinForms），**不经过 Windows 通知管道**，
@@ -96,11 +234,24 @@ const POPUP_SCRIPT = String.raw`
 param(
   [string]$Title, [string]$Text, [string]$Url,
   [string]$Theme, [string]$Accent, [string]$Position,
-  [int]$DurationSec, [int]$FontSize, [string]$FontFamily
+  [int]$DurationSec, [int]$FontSize, [string]$FontFamily,
+  [string]$SoundOn, [string]$SoundType, [string]$SoundPath
 )
 $ErrorActionPreference = 'SilentlyContinue'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+
+# ── 提示音（弹窗前播放；进程在窗口存活期内保持，异步 Play 可自然播完） ──
+if ($SoundOn -eq 'true') {
+  if ($SoundType -eq 'system') {
+    [System.Media.SystemSounds]::Asterisk.Play()
+  } elseif ($SoundPath -ne '') {
+    try {
+      $player = New-Object System.Media.SoundPlayer $SoundPath
+      $player.Play()
+    } catch {}
+  }
+}
 
 # ── 主题色 ───────────────────────────────────────────────
 if ($Theme -eq 'light') {
@@ -214,8 +365,41 @@ function saveConfig(cfg) {
 		console.error("[task-notify] 保存配置失败:", error);
 	}
 }
+/** 确保提示音 WAV 已生成（首用合成缓存到临时目录，文件名含音量），返回路径；失败返回空串。 */
+function ensureSoundFile(type) {
+	if (type === "system") return "";
+	try {
+		const file = join(SOUND_DIR, `${type}-${config.volume}.wav`);
+		if (!existsSync(file)) {
+			mkdirSync(SOUND_DIR, { recursive: true });
+			writeFileSync(file, synthSound(type, config.volume));
+		}
+		return file;
+	} catch {
+		return "";
+	}
+}
+/** 仅播放提示音（桌面卡片关闭但提示音开启时；fire-and-forget，PlaySync 阻塞播放完）。 */
+function playSoundOnly(soundType) {
+	if (process.platform !== "win32") return;
+	try {
+		const command = soundType === "system" ? `[System.Media.SystemSounds]::Asterisk.Play(); Start-Sleep -Milliseconds 900` : `$p = New-Object System.Media.SoundPlayer '${ensureSoundFile(soundType)}'; $p.PlaySync()`;
+		spawn("powershell.exe", [
+			"-NoProfile",
+			"-WindowStyle",
+			"Hidden",
+			"-Command",
+			command
+		], {
+			windowsHide: true,
+			stdio: "ignore"
+		}).on("error", () => {});
+	} catch (error) {
+		console.error("[task-notify] 播放提示音失败:", error);
+	}
+}
 /** 按当前配置弹飞书式置顶卡片（fire-and-forget，不阻塞宿主；不依赖系统通知开关）。 */
-function showPopup(title, text, url = WEB_URL) {
+function showPopup(title, text, url = WEB_URL, soundOn = false, soundType = "apple") {
 	if (process.platform !== "win32") return;
 	try {
 		writeFileSync(SCRIPT_PATH, POPUP_SCRIPT, "utf8");
@@ -235,7 +419,10 @@ function showPopup(title, text, url = WEB_URL) {
 			config.position,
 			String(config.durationSec),
 			String(config.fontSize),
-			config.fontFamily
+			config.fontFamily,
+			soundOn ? "true" : "false",
+			soundType,
+			soundOn && soundType !== "system" ? ensureSoundFile(soundType) : ""
 		], {
 			windowsHide: true,
 			stdio: "ignore"
@@ -280,14 +467,27 @@ function apply(ctx) {
 		const was = running.get(id);
 		running.set(id, nowRunning);
 		if (was !== true || nowRunning) return;
-		if (!config.desktop) return;
+		if (!config.desktop && !config.sound) return;
 		const now = Date.now();
 		if (now - lastNotifyAt < DEBOUNCE_MS) return;
 		lastNotifyAt = now;
-		showPopup("DSH 任务完成", `「${truncateTitle(sessionTitle?.get(agent.session)?.title ?? "DSH 会话")}」已完成`);
+		const title = truncateTitle(sessionTitle?.get(agent.session)?.title ?? "DSH 会话");
+		if (config.desktop) showPopup("DSH 任务完成", `「${title}」已完成`, WEB_URL, config.sound, config.soundType);
+		else if (config.sound) playSoundOnly(config.soundType);
 	});
 	events.on("agent/disposed", (payload) => {
 		running.delete(payload.agent.id);
+	});
+	events.on("session/event", (_session, event) => {
+		if (event?.type !== "tool/call") return;
+		const name = event.data?.name;
+		if (name === void 0 || !BLOCKING_TOOLS.has(name)) return;
+		if (name === "ask_user_question") fireWaitNotify("需要你回答", waitBody(name, event.data?.arguments));
+		else fireWaitNotify("计划等待审批", waitBody(name, event.data?.arguments));
+	});
+	events.on("approval/request", (_req, next) => {
+		fireWaitNotify("等待操作审批", "有一项操作等待你审批");
+		return next();
 	});
 	if (webServer !== void 0) {
 		webServer.register({
@@ -319,7 +519,10 @@ function apply(ctx) {
 							position: true,
 							durationSec: true,
 							fontSize: true,
-							fontFamily: true
+							fontFamily: true,
+							sound: true,
+							soundType: true,
+							volume: true
 						};
 						for (const key of keys) if (!known[key]) {
 							sendJson(res, 400, {
@@ -334,7 +537,7 @@ function apply(ctx) {
 						});
 						for (const key of keys) {
 							const value = patch[key];
-							if (!(key === "desktop" ? typeof value === "boolean" : key === "theme" ? isOneOf(value, THEMES) : key === "accent" ? isOneOf(value, ACCENTS) : key === "position" ? isOneOf(value, POSITIONS) : key === "durationSec" ? isOneOf(value, DURATIONS) : key === "fontSize" ? isOneOf(value, FONT_SIZES) : isOneOf(value, FONT_FAMILIES))) {
+							if (!(key === "desktop" ? typeof value === "boolean" : key === "theme" ? isOneOf(value, THEMES) : key === "accent" ? isOneOf(value, ACCENTS) : key === "position" ? isOneOf(value, POSITIONS) : key === "durationSec" ? isOneOf(value, DURATIONS) : key === "fontSize" ? isOneOf(value, FONT_SIZES) : key === "fontFamily" ? isOneOf(value, FONT_FAMILIES) : key === "sound" ? typeof value === "boolean" : key === "soundType" ? isOneOf(value, SOUND_TYPES) : typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100)) {
 								sendJson(res, 400, {
 									ok: false,
 									error: `非法值: ${key}`
@@ -376,7 +579,8 @@ function apply(ctx) {
 					});
 					return;
 				}
-				showPopup("任务完成通知（测试）", "桌面通知通道工作正常 ✓");
+				if (config.desktop) showPopup("任务完成通知（测试）", "桌面通知通道工作正常 ✓", WEB_URL, config.sound, config.soundType);
+				else if (config.sound) playSoundOnly(config.soundType);
 				sendJson(res, 200, {
 					ok: true,
 					supported: true

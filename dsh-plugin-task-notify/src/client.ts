@@ -37,12 +37,22 @@ export function apply(ctx: Context): void {
   })
 
   // 会话完成（running→idle）→ 应用内 toast（桌面通知由 Host 半负责）
-  const unwatch = watchCompletions(sessions.list, (info) => {
-    const cfg = getConfig()
-    if (!cfg.toast) return
-    const title = info.title !== '' ? info.title : '未命名会话'
-    pushToast({ title, body: '任务完成', sessionId: info.sessionId })
-  })
+  const unwatch = watchCompletions(
+    sessions.list,
+    (info) => {
+      const cfg = getConfig()
+      if (!cfg.toast) return
+      const title = info.title !== '' ? info.title : '未命名会话'
+      pushToast({ title, body: '任务完成', sessionId: info.sessionId })
+    },
+    // 等待用户输入/审批（pendingInteraction 出现）→ toast 提示
+    (info) => {
+      const cfg = getConfig()
+      if (!cfg.toast) return
+      const title = info.title !== '' ? info.title : '未命名会话'
+      pushToast({ title, body: '等待你的输入/审批', sessionId: info.sessionId })
+    },
+  )
   ctx.effect(() => unwatch)
 
   // 应用内 toast 堆栈（全局浮层）

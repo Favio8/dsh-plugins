@@ -11,6 +11,8 @@ export interface SessionRowView {
   running: boolean
   blank: boolean
   parentId?: string
+  /** 用户交互等待标记（提问/审批等；出现即代表该会话在等用户输入）。 */
+  pendingInteraction?: unknown
 }
 
 /** sessions.list 快照的最小结构（对应 SessionListState）。 */

@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-task-notify",
-  "version": "0.4.0",
-  "description": "DeepSeek Harness 任务完成通知插件：飞书式置顶卡片（主题/强调色/位置/时长/字体可配）+ 应用内 toast + 完整设置页。",
+  "version": "0.7.0",
+  "description": "DeepSeek Harness 任务完成通知插件：飞书式置顶卡片（主题/强调色/位置/时长/字体可配）+ 可选提示音（苹果三全音等，含音量调节）+ 等待输入/审批提醒 + 应用内 toast + 完整设置页。",
   "type": "module",
   "main": "lib/index.mjs",
   "exports": {

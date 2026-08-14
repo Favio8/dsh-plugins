@@ -307,6 +307,30 @@ const CSS = `
   opacity: 0.5;
   cursor: default;
 }
+
+/* 音量滑块 */
+.tn-volume {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.tn-range {
+  width: 120px;
+  height: 18px;
+  accent-color: var(--dsw-alias-brand-primary);
+  cursor: pointer;
+}
+.tn-range:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.tn-volume-value {
+  min-width: 34px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  font-variant-numeric: tabular-nums;
+}
 `
 
 let injected = false

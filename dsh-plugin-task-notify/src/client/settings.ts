@@ -11,6 +11,9 @@ interface HostConfig {
   durationSec: number
   fontSize: number
   fontFamily: string
+  sound: boolean
+  soundType: string
+  volume: number
   supported?: boolean
 }
 
@@ -53,6 +56,13 @@ const FONT_OPTIONS = [
   { value: 'SimSun', label: '宋体' },
   { value: 'SimHei', label: '黑体' },
   { value: 'KaiTi', label: '楷体' },
+]
+
+const SOUND_TYPE_OPTIONS = [
+  { value: 'apple', label: '苹果三全音' },
+  { value: 'ding', label: '叮' },
+  { value: 'double', label: '双响' },
+  { value: 'system', label: '系统提示音' },
 ]
 
 async function fetchHostConfig(): Promise<HostConfig | null> {
@@ -159,7 +169,22 @@ export function TaskNotifySettings(): React.ReactElement {
       ),
       React.createElement(Toggle, { checked: cfg.toast, onChange: (v) => setConfig({ toast: v }) }),
     ),
-    React.createElement('div', { className: 'tn-row-foot' }, '卡片样式与字体在设置页「任务完成通知」中调整'),
+    React.createElement(
+      'div',
+      { className: 'tn-field' },
+      React.createElement(
+        'div',
+        { className: 'tn-field-label' },
+        React.createElement('span', null, '提示音'),
+        React.createElement('span', { className: 'tn-field-sub' }, '任务完成时播放'),
+      ),
+      React.createElement(Toggle, {
+        checked: host?.sound === true,
+        onChange: (v) => patchHost({ sound: v }),
+        disabled: host === null,
+      }),
+    ),
+    React.createElement('div', { className: 'tn-row-foot' }, '卡片样式、字体与音色在设置页「任务完成通知」中调整'),
   )
 }
 
@@ -294,6 +319,65 @@ export function TaskNotifySection(_props: { close: () => void }): React.ReactEle
             onChange: (e: React.ChangeEvent<HTMLSelectElement>) => patchHost({ fontFamily: e.target.value }),
           },
           FONT_OPTIONS.map((f) => React.createElement('option', { key: f.value, value: f.value }, f.label)),
+        ),
+      ),
+    ),
+
+    React.createElement(
+      'div',
+      { className: 'tn-card' },
+      React.createElement('div', { className: 'tn-card-title' }, '提示音'),
+      React.createElement(
+        'div',
+        { className: 'tn-field' },
+        React.createElement(
+          'div',
+          { className: 'tn-field-label' },
+          React.createElement('span', null, '开启提示音'),
+          React.createElement('span', { className: 'tn-field-sub' }, '任务完成时播放，独立于浏览器'),
+        ),
+        React.createElement(Toggle, {
+          checked: host?.sound === true,
+          onChange: (v) => patchHost({ sound: v }),
+          disabled: host === null,
+        }),
+      ),
+      React.createElement(
+        'div',
+        { className: 'tn-field' },
+        React.createElement('div', { className: 'tn-field-label' }, '提示音'),
+        React.createElement(Segmented, {
+          value: host?.soundType ?? 'apple',
+          options: SOUND_TYPE_OPTIONS,
+          onChange: (v) => patchHost({ soundType: String(v) }),
+          disabled: host === null,
+        }),
+      ),
+      React.createElement(
+        'div',
+        { className: 'tn-field' },
+        React.createElement(
+          'div',
+          { className: 'tn-field-label' },
+          React.createElement('span', null, '音量'),
+          host?.soundType === 'system'
+            ? React.createElement('span', { className: 'tn-field-sub' }, '系统提示音不支持调节')
+            : null,
+        ),
+        React.createElement(
+          'div',
+          { className: 'tn-volume' },
+          React.createElement('input', {
+            type: 'range',
+            min: 0,
+            max: 100,
+            step: 5,
+            value: host?.volume ?? 80,
+            disabled: host === null || host?.soundType === 'system',
+            className: 'tn-range',
+            onChange: (e: React.ChangeEvent<HTMLInputElement>) => patchHost({ volume: Number(e.target.value) }),
+          }),
+          React.createElement('span', { className: 'tn-volume-value' }, `${host?.volume ?? 80}%`),
         ),
       ),
     ),

@@ -142,7 +142,10 @@ function ToastStack() {
 //#endregion
 //#region src/client/watcher.ts
 /**
-* 监听顶层会话的 running 翻转：running→idle 即"一轮任务完成"。
+* 监听顶层会话的运行/等待状态变化：
+* - running→idle：一轮任务完成（onComplete）。
+* - pendingInteraction 从无到有：会话在等用户输入/审批（onWaitStart），
+*   期间 agent 状态保持 running，完成通知不会触发，需要单独检测。
 *
 * - 只关心顶层会话（parentId 为空），子代理会话不提醒，避免噪声。
 * - blank（从未发过消息）的会话不参与。
@@ -150,21 +153,34 @@ function ToastStack() {
 *
 * @param list sessions.list 快照存储（getSnapshot + subscribe）。
 * @param onComplete 会话完成回调。
+* @param onWaitStart 会话等待用户输入/审批回调。
 * @returns 取消订阅函数，插件卸载时应调用。
 */
-function watchCompletions(list, onComplete) {
+function watchCompletions(list, onComplete, onWaitStart) {
 	const running = /* @__PURE__ */ new Map();
+	const waiting = /* @__PURE__ */ new Set();
 	const check = () => {
 		const byId = list.getSnapshot().byId;
 		for (const id of [...running.keys()]) if (byId[id] === void 0) running.delete(id);
+		for (const id of [...waiting]) if (byId[id] === void 0) waiting.delete(id);
 		for (const id of Object.keys(byId)) {
 			const row = byId[id];
 			if (row === void 0) continue;
 			if (row.parentId !== void 0) continue;
 			if (row.blank) {
 				running.delete(id);
+				waiting.delete(id);
 				continue;
 			}
+			if (row.pendingInteraction !== void 0) {
+				if (!waiting.has(id)) {
+					waiting.add(id);
+					onWaitStart?.({
+						sessionId: id,
+						title: row.displayTitle
+					});
+				}
+			} else waiting.delete(id);
 			const was = running.get(id);
 			const now = row.running;
 			if (was === true && now === false) {
@@ -270,6 +286,24 @@ const FONT_OPTIONS = [
 		label: "楷体"
 	}
 ];
+const SOUND_TYPE_OPTIONS = [
+	{
+		value: "apple",
+		label: "苹果三全音"
+	},
+	{
+		value: "ding",
+		label: "叮"
+	},
+	{
+		value: "double",
+		label: "双响"
+	},
+	{
+		value: "system",
+		label: "系统提示音"
+	}
+];
 async function fetchHostConfig() {
 	try {
 		return await (await fetch("/task-notify/config")).json();
@@ -338,7 +372,11 @@ function TaskNotifySettings() {
 	})), react.createElement("div", { className: "tn-field" }, react.createElement("div", { className: "tn-field-label" }, react.createElement("span", null, "应用内提示"), react.createElement("span", { className: "tn-field-sub" }, "页面右下角 toast")), react.createElement(Toggle, {
 		checked: cfg.toast,
 		onChange: (v) => setConfig({ toast: v })
-	})), react.createElement("div", { className: "tn-row-foot" }, "卡片样式与字体在设置页「任务完成通知」中调整"));
+	})), react.createElement("div", { className: "tn-field" }, react.createElement("div", { className: "tn-field-label" }, react.createElement("span", null, "提示音"), react.createElement("span", { className: "tn-field-sub" }, "任务完成时播放")), react.createElement(Toggle, {
+		checked: host?.sound === true,
+		onChange: (v) => patchHost({ sound: v }),
+		disabled: host === null
+	})), react.createElement("div", { className: "tn-row-foot" }, "卡片样式、字体与音色在设置页「任务完成通知」中调整"));
 }
 /**
 * settings.section 设置页「任务完成通知」：完整配置（通道 + 卡片样式 + 字体）+ 测试预览。
@@ -389,7 +427,25 @@ function TaskNotifySection(_props) {
 	}, FONT_OPTIONS.map((f) => react.createElement("option", {
 		key: f.value,
 		value: f.value
-	}, f.label))))), react.createElement("div", { className: "tn-page-actions" }, react.createElement("button", {
+	}, f.label))))), react.createElement("div", { className: "tn-card" }, react.createElement("div", { className: "tn-card-title" }, "提示音"), react.createElement("div", { className: "tn-field" }, react.createElement("div", { className: "tn-field-label" }, react.createElement("span", null, "开启提示音"), react.createElement("span", { className: "tn-field-sub" }, "任务完成时播放，独立于浏览器")), react.createElement(Toggle, {
+		checked: host?.sound === true,
+		onChange: (v) => patchHost({ sound: v }),
+		disabled: host === null
+	})), react.createElement("div", { className: "tn-field" }, react.createElement("div", { className: "tn-field-label" }, "提示音"), react.createElement(Segmented, {
+		value: host?.soundType ?? "apple",
+		options: SOUND_TYPE_OPTIONS,
+		onChange: (v) => patchHost({ soundType: String(v) }),
+		disabled: host === null
+	})), react.createElement("div", { className: "tn-field" }, react.createElement("div", { className: "tn-field-label" }, react.createElement("span", null, "音量"), host?.soundType === "system" ? react.createElement("span", { className: "tn-field-sub" }, "系统提示音不支持调节") : null), react.createElement("div", { className: "tn-volume" }, react.createElement("input", {
+		type: "range",
+		min: 0,
+		max: 100,
+		step: 5,
+		value: host?.volume ?? 80,
+		disabled: host === null || host?.soundType === "system",
+		className: "tn-range",
+		onChange: (e) => patchHost({ volume: Number(e.target.value) })
+	}), react.createElement("span", { className: "tn-volume-value" }, `${host?.volume ?? 80}%`)))), react.createElement("div", { className: "tn-page-actions" }, react.createElement("button", {
 		type: "button",
 		className: "tn-btn tn-btn-primary",
 		onClick: () => fireTest(host, cfg.toast)
@@ -735,6 +791,30 @@ const CSS = `
   opacity: 0.5;
   cursor: default;
 }
+
+/* 音量滑块 */
+.tn-volume {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.tn-range {
+  width: 120px;
+  height: 18px;
+  accent-color: var(--dsw-alias-brand-primary);
+  cursor: pointer;
+}
+.tn-range:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.tn-volume-value {
+  min-width: 34px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  font-variant-numeric: tabular-nums;
+}
 `;
 let injected = false;
 /** 注入插件样式（幂等；重复注入有 data-plugin-css 守卫）。 */
@@ -779,6 +859,13 @@ function apply(ctx) {
 		pushToast({
 			title: info.title !== "" ? info.title : "未命名会话",
 			body: "任务完成",
+			sessionId: info.sessionId
+		});
+	}, (info) => {
+		if (!getConfig().toast) return;
+		pushToast({
+			title: info.title !== "" ? info.title : "未命名会话",
+			body: "等待你的输入/审批",
 			sessionId: info.sessionId
 		});
 	});
