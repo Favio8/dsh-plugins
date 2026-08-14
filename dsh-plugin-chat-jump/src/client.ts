@@ -19,17 +19,13 @@ const USER_SEL = '[data-chat-flow-kind="user"]'
 const HEADROOM = 120
 /** 少于该数量用户消息时隐藏跳转条，避免噪音。 */
 const MIN_DOTS = 2
-/** 圆点直径（px），用于钳制底部边界。 */
-const DOT_SIZE = 7
 
 interface Dot {
   key: string
   el: HTMLElement
   label: string
-  /** 消息在容器视口内的 Y（0..containerHeight，越界钳制）。 */
+  /** 消息在容器视口内的 Y（越界由轨道 overflow hidden 裁切）。 */
   y: number
-  /** 消息当前是否在视口外（钳制在轨道两端，弱化显示）。 */
-  dim: boolean
 }
 
 export function apply(ctx: {
@@ -71,18 +67,28 @@ export function ChatJumpRail(): React.ReactElement | null {
     const collectDots = (): Dot[] => {
       if (container === null) return []
       const cRect = container.getBoundingClientRect()
-      const dot = DOT_SIZE
       return Array.from(container.querySelectorAll<HTMLElement>(USER_SEL)).map((el, i) => {
         const rect = el.getBoundingClientRect()
-        const raw = rect.top - cRect.top
         return {
           key: el.getAttribute('data-chat-flow-key') ?? `user-${i}`,
           el,
           label: (el.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 40),
-          y: Math.max(0, Math.min(cRect.height - dot, raw)),
-          dim: raw < 0 || raw > cRect.height,
+          // 消息在容器视口内的真实 Y；越界由轨道 overflow hidden 裁切，不堆叠
+          y: rect.top - cRect.top,
         }
       })
+    }
+
+    /** 轨道水平位置 = 对话内容列起点（容器 padding 或首条消息节点左偏移）。 */
+    const contentInset = (): number => {
+      if (container === null) return 24
+      const flowEl = container.querySelector<HTMLElement>('[data-chat-flow-key]')
+      if (flowEl !== null) {
+        const inset = flowEl.getBoundingClientRect().left - container.getBoundingClientRect().left
+        if (inset > 0) return inset
+      }
+      const cs = getComputedStyle(container)
+      return Number.parseFloat(cs.paddingLeft) || 24
     }
 
     const computeActive = (): void => {
@@ -105,7 +111,7 @@ export function ChatJumpRail(): React.ReactElement | null {
         if (container === null) return
         setDots(collectDots())
         const r = container.getBoundingClientRect()
-        setRect({ left: r.left, top: r.top, height: r.height })
+        setRect({ left: r.left + contentInset(), top: r.top, height: r.height })
         computeActive()
       })
     }
@@ -167,20 +173,14 @@ export function ChatJumpRail(): React.ReactElement | null {
     'div',
     {
       className: 'cj-rail',
-      style: { left: Math.max(6, rect.left - 22), top: rect.top, height: rect.height },
+      style: { left: rect.left, top: rect.top, height: rect.height },
     },
     dots.map((dot) =>
       React.createElement('button', {
         key: dot.key,
         type: 'button',
         style: { top: dot.y },
-        className: [
-          'cj-dot',
-          dot.key === activeKey ? 'cj-dot-active' : '',
-          dot.dim ? 'cj-dot-dim' : '',
-        ]
-          .filter(Boolean)
-          .join(' '),
+        className: dot.key === activeKey ? 'cj-dot cj-dot-active' : 'cj-dot',
         title: dot.label,
         'aria-label': dot.label,
         onClick: () => jump(dot),
@@ -193,6 +193,7 @@ const CSS = `
 .cj-rail {
   position: fixed;
   width: 14px;
+  overflow: hidden;
   z-index: 300;
   pointer-events: none;
 }
@@ -221,9 +222,6 @@ const CSS = `
 .cj-dot-active {
   background: var(--dsw-alias-brand-primary);
   transform: translateX(-50%) scale(1.2);
-}
-.cj-dot-dim {
-  opacity: 0.4;
 }
 `
 
