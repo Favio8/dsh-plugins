@@ -91,3 +91,21 @@ dsh plugin --profile web add "link:<本插件文件夹的绝对路径>"
 | 文件夹 | 包名 | 状态 | 说明 |
 | --- | --- | --- | --- |
 | `dsh-plugin-task-notify` | dsh-plugin-task-notify | 已挂载生效（web profile） | 任务完成通知（飞书式置顶卡片，不依赖系统通知 / 应用内 toast） |
+
+## 7. 提交规范（用户全局约定）
+
+用户所有项目的 commit 风格统一为：**`emoji 类型: 英文描述`**（语言为英文，如 `✨ feat: add task completion notifications`）。
+
+常用类型参考（gitmoji 风格）：
+
+| emoji | 类型 | 场景 |
+| --- | --- | --- |
+| ✨ | feat | 新功能 |
+| 🐛 | fix | 修复缺陷 |
+| 📝 | docs | 文档 |
+| ♻️ | refactor | 重构（无行为变化） |
+| 💄 | style | UI/样式 |
+| ⚡ | perf | 性能优化 |
+| ✅ | test | 测试 |
+| 🔧 | chore | 构建/配置/杂项 |
+| 🌱 | init | 初始化 |
