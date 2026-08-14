@@ -46,6 +46,8 @@ const USER_SEL = "[data-chat-flow-kind=\"user\"]";
 const HEADROOM = 120;
 /** 少于该数量用户消息时隐藏跳转条，避免噪音。 */
 const MIN_DOTS = 2;
+/** 圆点直径（px），用于钳制底部边界。 */
+const DOT_SIZE = 7;
 function apply(ctx) {
 	injectStyles();
 	const slots = ctx.get("slots");
@@ -68,11 +70,18 @@ function ChatJumpRail() {
 		let raf = 0;
 		const collectDots = () => {
 			if (container === null) return [];
-			return Array.from(container.querySelectorAll(USER_SEL)).map((el, i) => ({
-				key: el.getAttribute("data-chat-flow-key") ?? `user-${i}`,
-				el,
-				label: (el.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 40)
-			}));
+			const cRect = container.getBoundingClientRect();
+			const dot = DOT_SIZE;
+			return Array.from(container.querySelectorAll(USER_SEL)).map((el, i) => {
+				const raw = el.getBoundingClientRect().top - cRect.top;
+				return {
+					key: el.getAttribute("data-chat-flow-key") ?? `user-${i}`,
+					el,
+					label: (el.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 40),
+					y: Math.max(0, Math.min(cRect.height - dot, raw)),
+					dim: raw < 0 || raw > cRect.height
+				};
+			});
 		};
 		const computeActive = () => {
 			if (container === null) return;
@@ -104,14 +113,14 @@ function ChatJumpRail() {
 				childList: true,
 				subtree: true
 			});
-			c.addEventListener("scroll", computeActive, { passive: true });
+			c.addEventListener("scroll", refresh, { passive: true });
 			window.addEventListener("resize", refresh);
 			refresh();
 		};
 		const detach = () => {
 			containerObserver?.disconnect();
 			containerObserver = null;
-			if (container !== null) container.removeEventListener("scroll", computeActive);
+			if (container !== null) container.removeEventListener("scroll", refresh);
 			window.removeEventListener("resize", refresh);
 			container = null;
 			containerRef.current = null;
@@ -151,14 +160,19 @@ function ChatJumpRail() {
 	return react.createElement("div", {
 		className: "cj-rail",
 		style: {
-			left: Math.max(6, rect.left - 24),
+			left: Math.max(6, rect.left - 22),
 			top: rect.top,
 			height: rect.height
 		}
 	}, dots.map((dot) => react.createElement("button", {
 		key: dot.key,
 		type: "button",
-		className: dot.key === activeKey ? "cj-dot cj-dot-active" : "cj-dot",
+		style: { top: dot.y },
+		className: [
+			"cj-dot",
+			dot.key === activeKey ? "cj-dot-active" : "",
+			dot.dim ? "cj-dot-dim" : ""
+		].filter(Boolean).join(" "),
 		title: dot.label,
 		"aria-label": dot.label,
 		onClick: () => jump(dot)
@@ -167,18 +181,15 @@ function ChatJumpRail() {
 const CSS = `
 .cj-rail {
   position: fixed;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
   width: 14px;
-  padding-top: 96px;
   z-index: 300;
   pointer-events: none;
 }
 .cj-dot {
   pointer-events: auto;
-  flex: none;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
   width: 7px;
   height: 7px;
   border: 0;
@@ -190,7 +201,7 @@ const CSS = `
 }
 .cj-dot:hover {
   background: var(--dsw-alias-label-secondary);
-  transform: scale(1.35);
+  transform: translateX(-50%) scale(1.35);
 }
 .cj-dot:focus-visible {
   outline: 2px solid var(--dsw-alias-brand-primary);
@@ -198,7 +209,10 @@ const CSS = `
 }
 .cj-dot-active {
   background: var(--dsw-alias-brand-primary);
-  transform: scale(1.2);
+  transform: translateX(-50%) scale(1.2);
+}
+.cj-dot-dim {
+  opacity: 0.4;
 }
 `;
 let injected = false;
