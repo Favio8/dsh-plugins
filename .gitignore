@@ -14,6 +14,9 @@ dist/
 .env
 .env.local
 
+# 本地文档（仅本地留存，不提交）
+PRD.md
+
 # 系统文件
 Thumbs.db
 .DS_Store
