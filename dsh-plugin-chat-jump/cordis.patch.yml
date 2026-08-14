@@ -1,0 +1,6 @@
+# dsh-plugin-chat-jump bundle patch
+# 将对话快速跳转插件注册进 DSH 组合（Host 半为占位，功能全部在 client 半）。
+# 挂载方式见 README.md（profile package.json 的 link: 依赖 + dsh.profile.bundles）。
+- insert:
+    - id: chat-jump
+      name: 'dsh-plugin-chat-jump'

@@ -92,6 +92,7 @@ dsh plugin --profile web add "link:<本插件文件夹的绝对路径>"
 | --- | --- | --- | --- |
 | `dsh-plugin-task-notify` | dsh-plugin-task-notify | 已挂载生效（web profile） | 任务完成通知（飞书式置顶卡片，不依赖系统通知 / 应用内 toast） |
 | `dsh-plugin-workspace-files` | dsh-plugin-workspace-files | 已挂载生效（web profile） | 工作区文件体验（`@` 引用文件 + 修改文件点击预览 + 右上角项目文件夹浏览） |
+| `dsh-plugin-chat-jump` | dsh-plugin-chat-jump | 已挂载生效（web profile） | 对话快速跳转（对话流左侧圆点导航，类 Codex，点击直达各条用户消息） |
 
 ## 7. 提交规范（用户全局约定）
 

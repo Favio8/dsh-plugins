@@ -1,0 +1,61 @@
+{
+  "name": "dsh-plugin-chat-jump",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness 对话快速跳转插件：对话流左侧圆点导航（类 Codex），点击直达各条用户消息，滚动自动高亮当前点。",
+  "type": "module",
+  "main": "lib/index.mjs",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.mts",
+      "default": "./lib/index.mjs"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "README.md"
+  ],
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime"
+      ]
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "react": "^18.0.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@types/node": "^22.20.0",
+    "@types/react": "^18.3.0",
+    "react": "^18.3.1",
+    "tsdown": "^0.22.2",
+    "typescript": "^5.9.0"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "cordis",
+    "chat",
+    "navigation",
+    "jump",
+    "plugin"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}
