@@ -1,0 +1,6 @@
+# dsh-plugin-workspace-files bundle patch
+# 将工作区文件体验插件注册进 DSH 组合（Host 半：文件 HTTP 桥；Client 半：@ 引用/预览/文件夹浏览）。
+# 挂载方式见 README.md（profile package.json 的 link: 依赖 + dsh.profile.bundles）。
+- insert:
+    - id: workspace-files
+      name: 'dsh-plugin-workspace-files'

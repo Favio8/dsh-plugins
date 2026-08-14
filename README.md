@@ -11,6 +11,7 @@
 | 插件 | 说明 | 状态 |
 | --- | --- | --- |
 | [dsh-plugin-task-notify](./dsh-plugin-task-notify) | 任务完成通知：飞书式置顶卡片（主题/强调色/位置/时长/字体可配）+ 应用内 toast + 完整设置页 | ✅ 已挂载生效 |
+| [dsh-plugin-workspace-files](./dsh-plugin-workspace-files) | 工作区文件体验：输入框 `@` 引用文件（最近引用/层级导航）+ 修改文件点击侧边栏预览 + 右上角项目文件夹浏览 | ✅ 已挂载生效 |
 | [dsh-plugin-deepeye](https://github.com/Favio8/dsh-plugin-deepeye) | DeepEye：视觉能力（图片描述 / OCR / 视觉问答 / 布局分析 / 剪贴板），**独立仓库** | 独立仓库 |
 
 ## 特性
