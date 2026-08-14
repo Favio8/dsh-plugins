@@ -46,6 +46,9 @@ const USER_SEL = "[data-chat-flow-kind=\"user\"]";
 const HEADROOM = 120;
 /** 少于该数量用户消息时隐藏跳转条，避免噪音。 */
 const MIN_DOTS = 2;
+/** 圆点直径与间距（固定一簇的排版参数）。 */
+const DOT_SIZE = 7;
+const DOT_GAP = 8;
 function apply(ctx) {
 	injectStyles();
 	const slots = ctx.get("slots");
@@ -68,16 +71,11 @@ function ChatJumpRail() {
 		let raf = 0;
 		const collectDots = () => {
 			if (container === null) return [];
-			const cRect = container.getBoundingClientRect();
-			return Array.from(container.querySelectorAll(USER_SEL)).map((el, i) => {
-				const rect = el.getBoundingClientRect();
-				return {
-					key: el.getAttribute("data-chat-flow-key") ?? `user-${i}`,
-					el,
-					label: (el.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 40),
-					y: rect.top - cRect.top
-				};
-			});
+			return Array.from(container.querySelectorAll(USER_SEL)).map((el, i) => ({
+				key: el.getAttribute("data-chat-flow-key") ?? `user-${i}`,
+				el,
+				label: (el.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 40)
+			}));
 		};
 		/** 轨道水平位置 = 对话内容列起点（容器 padding 或首条消息节点左偏移）。 */
 		const contentInset = () => {
@@ -120,14 +118,14 @@ function ChatJumpRail() {
 				childList: true,
 				subtree: true
 			});
-			c.addEventListener("scroll", refresh, { passive: true });
+			c.addEventListener("scroll", computeActive, { passive: true });
 			window.addEventListener("resize", refresh);
 			refresh();
 		};
 		const detach = () => {
 			containerObserver?.disconnect();
 			containerObserver = null;
-			if (container !== null) container.removeEventListener("scroll", refresh);
+			if (container !== null) container.removeEventListener("scroll", computeActive);
 			window.removeEventListener("resize", refresh);
 			container = null;
 			containerRef.current = null;
@@ -164,17 +162,17 @@ function ChatJumpRail() {
 			behavior: "smooth"
 		});
 	};
+	const clusterH = dots.length * DOT_SIZE + (dots.length - 1) * DOT_GAP;
+	const clusterTop = rect.top + Math.max(0, (rect.height - clusterH) / 2);
 	return react.createElement("div", {
 		className: "cj-rail",
 		style: {
 			left: rect.left,
-			top: rect.top,
-			height: rect.height
+			top: clusterTop
 		}
 	}, dots.map((dot) => react.createElement("button", {
 		key: dot.key,
 		type: "button",
-		style: { top: dot.y },
 		className: dot.key === activeKey ? "cj-dot cj-dot-active" : "cj-dot",
 		title: dot.label,
 		"aria-label": dot.label,
@@ -184,16 +182,17 @@ function ChatJumpRail() {
 const CSS = `
 .cj-rail {
   position: fixed;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
   width: 14px;
-  overflow: hidden;
   z-index: 300;
   pointer-events: none;
 }
 .cj-dot {
   pointer-events: auto;
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
+  flex: none;
   width: 7px;
   height: 7px;
   border: 0;
@@ -205,7 +204,7 @@ const CSS = `
 }
 .cj-dot:hover {
   background: var(--dsw-alias-label-secondary);
-  transform: translateX(-50%) scale(1.35);
+  transform: scale(1.35);
 }
 .cj-dot:focus-visible {
   outline: 2px solid var(--dsw-alias-brand-primary);
@@ -213,7 +212,7 @@ const CSS = `
 }
 .cj-dot-active {
   background: var(--dsw-alias-brand-primary);
-  transform: translateX(-50%) scale(1.2);
+  transform: scale(1.2);
 }
 `;
 let injected = false;
