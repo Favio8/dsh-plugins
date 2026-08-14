@@ -78,16 +78,29 @@ function ChatJumpRail() {
 				label: (el.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 40)
 			}));
 		};
+		/** 会话头「对话」视图 tab（zh: 对话 / en: Conversation）。 */
+		const findChatTab = () => {
+			for (const el of document.querySelectorAll("[role=\"tab\"]")) {
+				const text = (el.textContent ?? "").trim();
+				if (text === "对话" || text === "Conversation") return el;
+			}
+			return null;
+		};
 		/**
-		* 轨道水平位置 = 对话正文列起点。
-		* 取所有 flow 节点中最靠左的左偏移（首个节点可能是居中元素，
-		* 例如 compaction 摘要条，会带出巨大假偏移，必须取最小值）。
+		* 轨道水平位置：优先对齐会话头「对话」tab 的正下方（左缘对齐）；
+		* 回退到正文列起点（取所有 flow 节点中最靠左的，避开居中的
+		* compaction 摘要条等带出巨大假偏移的首节点）。
 		*/
-		const contentInset = () => {
+		const horizontalInset = () => {
 			if (container === null) return 24;
+			const cLeft = container.getBoundingClientRect().left;
+			const tab = findChatTab();
+			if (tab !== null) {
+				const tabLeft = tab.getBoundingClientRect().left - cLeft;
+				if (tabLeft >= 0) return tabLeft;
+			}
 			const flows = Array.from(container.querySelectorAll("[data-chat-flow-key]"));
 			if (flows.length > 0) {
-				const cLeft = container.getBoundingClientRect().left;
 				let min = Number.POSITIVE_INFINITY;
 				for (const el of flows) min = Math.min(min, el.getBoundingClientRect().left - cLeft);
 				if (Number.isFinite(min) && min > 0) return min;
@@ -110,7 +123,7 @@ function ChatJumpRail() {
 				setDots(collectDots());
 				const r = container.getBoundingClientRect();
 				setRect({
-					left: r.left + contentInset(),
+					left: r.left + horizontalInset(),
 					top: r.top,
 					height: r.height
 				});
