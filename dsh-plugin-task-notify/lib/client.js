@@ -1,0 +1,809 @@
+window.__ModuleLoader__.load({
+	id: "dsh-plugin-task-notify",
+	factory: (require) => {
+		var module = { exports: {} };
+		var exports = module.exports;
+Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
+//#region \0rolldown/runtime.js
+var __create = Object.create;
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __copyProps = (to, from, except, desc) => {
+	if (from && typeof from === "object" || typeof from === "function") for (var keys = __getOwnPropNames(from), i = 0, n = keys.length, key; i < n; i++) {
+		key = keys[i];
+		if (!__hasOwnProp.call(to, key) && key !== except) __defProp(to, key, {
+			get: ((k) => from[k]).bind(null, key),
+			enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable
+		});
+	}
+	return to;
+};
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(isNodeMode || !mod || !mod.__esModule || !__hasOwnProp.call(mod, "default") ? __defProp(target, "default", {
+	value: mod,
+	enumerable: true
+}) : target, mod));
+//#endregion
+let react = require("react");
+react = __toESM(react, 1);
+//#region src/client/config.ts
+const STORAGE_KEY = "dsh-plugin-task-notify.config";
+const DEFAULTS = { toast: true };
+let config = load();
+const listeners$1 = /* @__PURE__ */ new Set();
+function load() {
+	try {
+		const raw = localStorage.getItem(STORAGE_KEY);
+		if (!raw) return { ...DEFAULTS };
+		const parsed = JSON.parse(raw);
+		return { toast: typeof parsed.toast === "boolean" ? parsed.toast : DEFAULTS.toast };
+	} catch {
+		return { ...DEFAULTS };
+	}
+}
+function getConfig() {
+	return config;
+}
+function setConfig(patch) {
+	config = {
+		...config,
+		...patch
+	};
+	try {
+		localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+	} catch {}
+	for (const fn of [...listeners$1]) fn();
+	return config;
+}
+function subscribeConfig(fn) {
+	listeners$1.add(fn);
+	return () => {
+		listeners$1.delete(fn);
+	};
+}
+//#endregion
+//#region src/client/toasts.ts
+const AUTO_DISMISS_MS = 6e3;
+let toasts = [];
+let seq = 0;
+const listeners = /* @__PURE__ */ new Set();
+const timers = /* @__PURE__ */ new Map();
+let openSession = () => {};
+function emit() {
+	for (const fn of [...listeners]) fn();
+}
+/** 由插件 apply 注入"点击 toast 打开会话"的实现（需要 ctx.sessions）。 */
+function setOpenSession(fn) {
+	openSession = fn;
+}
+function pushToast(item) {
+	const id = ++seq;
+	toasts = [...toasts, {
+		...item,
+		id,
+		createdAt: Date.now()
+	}].slice(-4);
+	const timer = setTimeout(() => {
+		timers.delete(id);
+		dismissToast(id);
+	}, AUTO_DISMISS_MS);
+	timers.set(id, timer);
+	emit();
+}
+function dismissToast(id) {
+	const timer = timers.get(id);
+	if (timer !== void 0) {
+		clearTimeout(timer);
+		timers.delete(id);
+	}
+	toasts = toasts.filter((t) => t.id !== id);
+	emit();
+}
+function subscribeToasts(fn) {
+	listeners.add(fn);
+	return () => {
+		listeners.delete(fn);
+	};
+}
+function getToasts() {
+	return toasts;
+}
+/** 插件卸载时清理全部定时器与监听（由 apply 的 ctx.effect 挂接）。 */
+function disposeToasts() {
+	for (const timer of timers.values()) clearTimeout(timer);
+	timers.clear();
+	toasts = [];
+	listeners.clear();
+}
+/** 应用内 toast 堆栈组件（注册进 shell.overlay 槽位）。 */
+function ToastStack() {
+	const [, force] = react.useState(0);
+	react.useEffect(() => subscribeToasts(() => force((n) => n + 1)), []);
+	const items = getToasts();
+	if (items.length === 0) return null;
+	return react.createElement("div", { className: "tn-toast-stack" }, items.map((t) => react.createElement("div", {
+		key: t.id,
+		className: "tn-toast",
+		onClick: () => {
+			if (t.sessionId !== void 0) openSession(t.sessionId);
+		}
+	}, react.createElement("span", { className: "tn-toast-dot" }), react.createElement("div", { className: "tn-toast-main" }, react.createElement("div", { className: "tn-toast-title" }, t.title), react.createElement("div", { className: "tn-toast-body" }, t.body)), react.createElement("button", {
+		type: "button",
+		className: "tn-toast-close",
+		"aria-label": "关闭",
+		onClick: (e) => {
+			e.stopPropagation();
+			dismissToast(t.id);
+		}
+	}, "×"))));
+}
+//#endregion
+//#region src/client/watcher.ts
+/**
+* 监听顶层会话的 running 翻转：running→idle 即"一轮任务完成"。
+*
+* - 只关心顶层会话（parentId 为空），子代理会话不提醒，避免噪声。
+* - blank（从未发过消息）的会话不参与。
+* - 首次调用只播种当前状态，不触发任何通知。
+*
+* @param list sessions.list 快照存储（getSnapshot + subscribe）。
+* @param onComplete 会话完成回调。
+* @returns 取消订阅函数，插件卸载时应调用。
+*/
+function watchCompletions(list, onComplete) {
+	const running = /* @__PURE__ */ new Map();
+	const check = () => {
+		const byId = list.getSnapshot().byId;
+		for (const id of [...running.keys()]) if (byId[id] === void 0) running.delete(id);
+		for (const id of Object.keys(byId)) {
+			const row = byId[id];
+			if (row === void 0) continue;
+			if (row.parentId !== void 0) continue;
+			if (row.blank) {
+				running.delete(id);
+				continue;
+			}
+			const was = running.get(id);
+			const now = row.running;
+			if (was === true && now === false) {
+				running.set(id, false);
+				onComplete({
+					sessionId: id,
+					title: row.displayTitle
+				});
+			} else running.set(id, now);
+		}
+	};
+	check();
+	return list.subscribe(check);
+}
+//#endregion
+//#region src/client/settings.ts
+const THEME_OPTIONS = [{
+	value: "dark",
+	label: "深色"
+}, {
+	value: "light",
+	label: "浅色"
+}];
+const ACCENT_COLORS = {
+	green: "#57B478",
+	blue: "#4A90D9",
+	orange: "#E8A13D",
+	purple: "#9B6FE8"
+};
+const POSITION_OPTIONS = [
+	{
+		value: "br",
+		label: "右下"
+	},
+	{
+		value: "bl",
+		label: "左下"
+	},
+	{
+		value: "tr",
+		label: "右上"
+	},
+	{
+		value: "tl",
+		label: "左上"
+	}
+];
+const DURATION_OPTIONS = [
+	{
+		value: 4,
+		label: "4 秒"
+	},
+	{
+		value: 6,
+		label: "6 秒"
+	},
+	{
+		value: 8,
+		label: "8 秒"
+	},
+	{
+		value: 10,
+		label: "10 秒"
+	}
+];
+const FONT_SIZE_OPTIONS = [
+	{
+		value: 11,
+		label: "小"
+	},
+	{
+		value: 12,
+		label: "标准"
+	},
+	{
+		value: 13,
+		label: "大"
+	},
+	{
+		value: 14,
+		label: "特大"
+	}
+];
+const FONT_OPTIONS = [
+	{
+		value: "Microsoft YaHei UI",
+		label: "微软雅黑"
+	},
+	{
+		value: "Segoe UI",
+		label: "系统默认"
+	},
+	{
+		value: "SimSun",
+		label: "宋体"
+	},
+	{
+		value: "SimHei",
+		label: "黑体"
+	},
+	{
+		value: "KaiTi",
+		label: "楷体"
+	}
+];
+async function fetchHostConfig() {
+	try {
+		return await (await fetch("/task-notify/config")).json();
+	} catch {
+		return null;
+	}
+}
+async function patchHostConfig(patch) {
+	try {
+		return await (await fetch("/task-notify/config", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(patch)
+		})).json();
+	} catch {
+		return null;
+	}
+}
+/** 加载宿主配置到组件状态（卸载安全），并返回打补丁函数。 */
+function useHostConfig() {
+	const [host, setHost] = react.useState(null);
+	react.useEffect(() => {
+		let cancelled = false;
+		fetchHostConfig().then((h) => {
+			if (!cancelled) setHost(h);
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+	return [host, react.useCallback((p) => {
+		setHost((prev) => prev === null ? prev : {
+			...prev,
+			...p
+		});
+		patchHostConfig(p).then((h) => {
+			if (h !== null) setHost(h);
+		});
+	}, [])];
+}
+/** 按当前开关触发测试（桌面卡片 + 应用内 toast）。 */
+function fireTest(host, toastOn) {
+	if (toastOn) pushToast({
+		title: "这是一条测试通知",
+		body: "任务完成通知（测试）"
+	});
+	if (host?.desktop === true) fetch("/task-notify/test", { method: "POST" }).catch(() => {});
+}
+/**
+* settings.general.item 设置行（重做版）：紧凑卡片，快速开关 + 测试。
+* 完整样式选项在设置页「任务完成通知」。
+*/
+function TaskNotifySettings() {
+	const [, force] = react.useState(0);
+	react.useEffect(() => subscribeConfig(() => force((n) => n + 1)), []);
+	const cfg = getConfig();
+	const [host, patchHost] = useHostConfig();
+	return react.createElement("div", { className: "tn-row" }, react.createElement("div", { className: "tn-row-head" }, react.createElement("span", { className: "tn-row-title" }, "任务完成通知"), react.createElement("button", {
+		type: "button",
+		className: "tn-btn",
+		onClick: () => fireTest(host, cfg.toast)
+	}, "测试")), react.createElement("div", { className: "tn-field" }, react.createElement("div", { className: "tn-field-label" }, react.createElement("span", null, "桌面通知"), react.createElement("span", { className: "tn-field-sub" }, "独立于浏览器，页面关闭也能收到")), react.createElement(Toggle, {
+		checked: host?.desktop === true,
+		onChange: (v) => patchHost({ desktop: v }),
+		disabled: host === null
+	})), react.createElement("div", { className: "tn-field" }, react.createElement("div", { className: "tn-field-label" }, react.createElement("span", null, "应用内提示"), react.createElement("span", { className: "tn-field-sub" }, "页面右下角 toast")), react.createElement(Toggle, {
+		checked: cfg.toast,
+		onChange: (v) => setConfig({ toast: v })
+	})), react.createElement("div", { className: "tn-row-foot" }, "卡片样式与字体在设置页「任务完成通知」中调整"));
+}
+/**
+* settings.section 设置页「任务完成通知」：完整配置（通道 + 卡片样式 + 字体）+ 测试预览。
+*/
+function TaskNotifySection(_props) {
+	const [, force] = react.useState(0);
+	react.useEffect(() => subscribeConfig(() => force((n) => n + 1)), []);
+	const cfg = getConfig();
+	const [host, patchHost] = useHostConfig();
+	const supported = host?.supported !== false;
+	const hint = host === null ? "正在连接…" : supported ? null : "桌面通知仅支持 Windows";
+	return react.createElement("div", { className: "tn-page" }, react.createElement("div", { className: "tn-page-title" }, "任务完成通知"), react.createElement("div", { className: "tn-page-desc" }, "会话一轮任务结束时提醒你；桌面卡片为自绘置顶窗口，不依赖系统通知开关。"), react.createElement("div", { className: "tn-card" }, react.createElement("div", { className: "tn-card-title" }, "通知通道"), react.createElement("div", { className: "tn-field" }, react.createElement("div", { className: "tn-field-label" }, react.createElement("span", null, "桌面通知"), react.createElement("span", { className: "tn-field-sub" }, "独立于浏览器，页面关闭也能收到")), react.createElement(Toggle, {
+		checked: host?.desktop === true,
+		onChange: (v) => patchHost({ desktop: v }),
+		disabled: host === null
+	})), react.createElement("div", { className: "tn-field" }, react.createElement("div", { className: "tn-field-label" }, react.createElement("span", null, "应用内提示"), react.createElement("span", { className: "tn-field-sub" }, "页面右下角 toast")), react.createElement(Toggle, {
+		checked: cfg.toast,
+		onChange: (v) => setConfig({ toast: v })
+	}))), react.createElement("div", { className: "tn-card" }, react.createElement("div", { className: "tn-card-title" }, "卡片样式"), react.createElement("div", { className: "tn-field" }, react.createElement("div", { className: "tn-field-label" }, "主题"), react.createElement(Segmented, {
+		value: host?.theme ?? "dark",
+		options: THEME_OPTIONS,
+		onChange: (v) => patchHost({ theme: String(v) }),
+		disabled: host === null
+	})), react.createElement("div", { className: "tn-field" }, react.createElement("div", { className: "tn-field-label" }, "强调色"), react.createElement(Swatches, {
+		value: host?.accent ?? "green",
+		onChange: (v) => patchHost({ accent: v }),
+		disabled: host === null
+	})), react.createElement("div", { className: "tn-field" }, react.createElement("div", { className: "tn-field-label" }, "位置"), react.createElement(Segmented, {
+		value: host?.position ?? "br",
+		options: POSITION_OPTIONS,
+		onChange: (v) => patchHost({ position: String(v) }),
+		disabled: host === null
+	})), react.createElement("div", { className: "tn-field" }, react.createElement("div", { className: "tn-field-label" }, "显示时长"), react.createElement(Segmented, {
+		value: host?.durationSec ?? 6,
+		options: DURATION_OPTIONS,
+		onChange: (v) => patchHost({ durationSec: Number(v) }),
+		disabled: host === null
+	}))), react.createElement("div", { className: "tn-card" }, react.createElement("div", { className: "tn-card-title" }, "字体"), react.createElement("div", { className: "tn-field" }, react.createElement("div", { className: "tn-field-label" }, "字号"), react.createElement(Segmented, {
+		value: host?.fontSize ?? 12,
+		options: FONT_SIZE_OPTIONS,
+		onChange: (v) => patchHost({ fontSize: Number(v) }),
+		disabled: host === null
+	})), react.createElement("div", { className: "tn-field" }, react.createElement("div", { className: "tn-field-label" }, "字体"), react.createElement("select", {
+		className: "tn-select",
+		value: host?.fontFamily ?? "Microsoft YaHei UI",
+		disabled: host === null,
+		onChange: (e) => patchHost({ fontFamily: e.target.value })
+	}, FONT_OPTIONS.map((f) => react.createElement("option", {
+		key: f.value,
+		value: f.value
+	}, f.label))))), react.createElement("div", { className: "tn-page-actions" }, react.createElement("button", {
+		type: "button",
+		className: "tn-btn tn-btn-primary",
+		onClick: () => fireTest(host, cfg.toast)
+	}, "测试通知"), hint !== null ? react.createElement("span", { className: "tn-settings-hint" }, hint) : null));
+}
+function Toggle(props) {
+	return react.createElement("button", {
+		type: "button",
+		role: "switch",
+		"aria-checked": props.checked,
+		disabled: props.disabled === true,
+		className: props.checked ? "tn-toggle tn-toggle-on" : "tn-toggle",
+		onClick: () => props.onChange(!props.checked)
+	}, react.createElement("span", { className: "tn-toggle-knob" }));
+}
+function Segmented(props) {
+	return react.createElement("div", { className: "tn-seg" }, props.options.map((o) => react.createElement("button", {
+		key: String(o.value),
+		type: "button",
+		disabled: props.disabled === true,
+		className: o.value === props.value ? "tn-seg-item tn-seg-active" : "tn-seg-item",
+		onClick: () => props.onChange(o.value)
+	}, o.label)));
+}
+function Swatches(props) {
+	return react.createElement("div", { className: "tn-swatches" }, Object.entries(ACCENT_COLORS).map(([key, color]) => react.createElement("button", {
+		key,
+		type: "button",
+		title: key,
+		disabled: props.disabled === true,
+		className: key === props.value ? "tn-swatch tn-swatch-active" : "tn-swatch",
+		style: { background: color },
+		onClick: () => props.onChange(key)
+	})));
+}
+//#endregion
+//#region src/client/styles.ts
+/**
+* 插件样式：一次性注入，卸载时由客户端运行时的 style 清理机制移除。
+* 颜色全部使用 DSH 主题变量（--dsw-alias-* / --dsw-shadow-*），跟随深浅色主题。
+*/
+const CSS = `
+/* ── 应用内 toast 堆栈（shell.overlay） ───────────────────── */
+.tn-toast-stack {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(360px, calc(100vw - 32px));
+  pointer-events: none;
+}
+.tn-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  background: var(--dsw-alias-bg-overlay);
+  box-shadow: var(--dsw-shadow-lv3);
+  cursor: pointer;
+  animation: tn-toast-in 0.18s ease-out;
+}
+.tn-toast:hover {
+  border-color: var(--dsw-alias-border-l1);
+}
+.tn-toast-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--dsw-alias-state-success-primary);
+}
+.tn-toast-main {
+  min-width: 0;
+  flex: 1;
+}
+.tn-toast-title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  color: var(--dsw-alias-label-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tn-toast-body {
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tn-toast-close {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px;
+  cursor: pointer;
+}
+.tn-toast-close:hover {
+  color: var(--dsw-alias-label-primary);
+}
+@keyframes tn-toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ── 通用控件 ─────────────────────────────────────────────── */
+.tn-toggle {
+  position: relative;
+  flex: none;
+  width: 34px;
+  height: 20px;
+  border: 0;
+  border-radius: 10px;
+  padding: 0;
+  background: var(--dsw-alias-fill-l2);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.tn-toggle:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.tn-toggle-on {
+  background: var(--dsw-alias-brand-primary);
+}
+.tn-toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: left 0.15s;
+}
+.tn-toggle-on .tn-toggle-knob {
+  left: 16px;
+}
+
+.tn-btn {
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+.tn-btn:hover {
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-brand-primary);
+}
+.tn-btn-primary {
+  background: var(--dsw-alias-brand-primary);
+  border-color: var(--dsw-alias-brand-primary);
+  color: #fff;
+  padding: 5px 16px;
+  font-size: 13px;
+  line-height: 20px;
+}
+.tn-btn-primary:hover {
+  color: #fff;
+  opacity: 0.9;
+}
+
+.tn-settings-hint {
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* ── 设置行（settings.general.item） ───────────────────────── */
+.tn-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 0;
+  min-width: 0;
+}
+.tn-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.tn-row-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+.tn-row-foot {
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* ── 字段行（label 左，控件右） ────────────────────────────── */
+.tn-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 32px;
+}
+.tn-field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.tn-field-label > span:first-child {
+  font-size: 13px;
+  color: var(--dsw-alias-label-primary);
+}
+.tn-field-sub {
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* ── 设置页（settings.section） ────────────────────────────── */
+.tn-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 560px;
+  padding: 4px 2px;
+}
+.tn-page-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+.tn-page-desc {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+  margin-top: -6px;
+}
+.tn-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.tn-card-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-tertiary);
+}
+.tn-card .tn-field + .tn-field {
+  border-top: 1px solid var(--dsw-alias-border-l1);
+  padding-top: 8px;
+}
+.tn-page-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* 分段选择 */
+.tn-seg {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--dsw-alias-fill-l2);
+  border-radius: 8px;
+  padding: 2px;
+}
+.tn-seg-item {
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 20px;
+  padding: 2px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tn-seg-item:hover {
+  color: var(--dsw-alias-label-primary);
+}
+.tn-seg-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.tn-seg-active {
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+/* 强调色色板 */
+.tn-swatches {
+  display: inline-flex;
+  gap: 8px;
+}
+.tn-swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+.tn-swatch:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.tn-swatch-active {
+  box-shadow:
+    0 0 0 2px var(--dsw-alias-bg-layer-1),
+    0 0 0 3.5px var(--dsw-alias-brand-primary);
+}
+
+/* 字体下拉 */
+.tn-select {
+  background: var(--dsw-alias-bg-layer-1);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 6px;
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  padding: 4px 8px;
+  min-width: 110px;
+  cursor: pointer;
+}
+.tn-select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+`;
+let injected = false;
+/** 注入插件样式（幂等；重复注入有 data-plugin-css 守卫）。 */
+function injectStyles() {
+	if (injected) return;
+	if (typeof document === "undefined") return;
+	if (document.querySelector("style[data-plugin-css=\"dsh-plugin-task-notify\"]") !== null) {
+		injected = true;
+		return;
+	}
+	const tag = document.createElement("style");
+	tag.dataset.plugin = "dsh-plugin-task-notify";
+	tag.dataset.pluginCss = "dsh-plugin-task-notify";
+	tag.textContent = CSS;
+	document.head.appendChild(tag);
+	injected = true;
+}
+//#endregion
+//#region src/client.ts
+const inject = ["sessions", "slots"];
+/**
+* dsh-plugin-task-notify — 任务完成通知（Client 半）。
+*
+* 机制：订阅 ctx.sessions.list 快照存储，监听顶层会话 running→idle 翻转
+* （即一轮任务完成），触发应用内 toast。**系统级桌面通知由 Host 半负责**
+* （agent/status + Windows 原生气泡，独立于浏览器页面），客户端只做页面内提示
+* 与设置行（通过 /task-notify/* HTTP 桥控制宿主开关）。
+* UI 全部走槽位：shell.overlay（toast 堆栈）+ settings.general.item（设置行）。
+*/
+function apply(ctx) {
+	injectStyles();
+	ctx.effect(() => disposeToasts);
+	const sessions = ctx.get("sessions");
+	const slots = ctx.get("slots");
+	setOpenSession((sessionId) => {
+		try {
+			sessions.open(sessionId);
+		} catch {}
+	});
+	const unwatch = watchCompletions(sessions.list, (info) => {
+		if (!getConfig().toast) return;
+		pushToast({
+			title: info.title !== "" ? info.title : "未命名会话",
+			body: "任务完成",
+			sessionId: info.sessionId
+		});
+	});
+	ctx.effect(() => unwatch);
+	slots.inject("shell.overlay", () => slots.register({
+		name: "shell.overlay",
+		id: "task-notify-toasts",
+		order: 100
+	}, ToastStack));
+	slots.inject("settings.general.item", () => slots.register({
+		name: "settings.general.item",
+		id: "task-notify",
+		order: 30
+	}, TaskNotifySettings));
+	slots.inject("settings.section", () => slots.register({
+		name: "settings.section",
+		id: "task-notify",
+		order: 25,
+		label: () => "任务完成通知"
+	}, TaskNotifySection));
+}
+//#endregion
+exports.apply = apply;
+exports.inject = inject;
+
+		return module.exports;
+	}
+});

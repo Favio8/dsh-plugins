@@ -1,0 +1,8 @@
+# dsh-plugin-task-notify bundle patch
+# 将任务完成通知插件注册进 DSH 组合。
+# 注意：本插件为纯客户端插件，Host 半是空实现占位（功能全部在 client 半）。
+#
+# 挂载方式见 README.md（profile package.json 的 link: 依赖 + dsh.profile.bundles）。
+- insert:
+    - id: task-notify
+      name: 'dsh-plugin-task-notify'

@@ -1,0 +1,19 @@
+# 依赖与构建缓存
+node_modules/
+dist/
+*.tsbuildinfo
+.pnpm-store/
+
+# 部署重启 / 诊断临时文件（勿提交）
+.relaunch-*
+.dsh-web-*
+.notify-*
+.popup-*
+
+# 本地环境
+.env
+.env.local
+
+# 系统文件
+Thumbs.db
+.DS_Store
