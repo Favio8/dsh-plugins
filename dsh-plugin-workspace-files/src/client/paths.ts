@@ -42,9 +42,20 @@ export function relOf(abs: string, root: string): string {
   return abs.replace(/\\/g, '/')
 }
 
-/** 是否「像」一个文件路径（含分隔符或点扩展名）。 */
-export function looksLikePath(value: string): boolean {
-  return value.includes('/') || value.includes('\\') || /^[^\\/]+\.[A-Za-z0-9]+$/.test(value)
+/**
+ * 是否「就是」一个路径 token（严格判定，拒绝「含路径的句子」，
+ * 如 tooltip「当前会话工作目录：D:\…」里夹着中文与冒号）：
+ * - 绝对：盘符+分隔符，或 /、\\ 开头；
+ * - 相对：纯路径段组成（字母数字 ._@+~- 与分隔符），或单段带扩展名。
+ */
+export function isPathTitle(value: string): boolean {
+  const t = value.trim()
+  if (t === '') return false
+  if (/^[A-Za-z]:[\\/]/.test(t) || t.startsWith('/') || t.startsWith('\\')) return true
+  return (
+    /^[\w.@+~-]+(?:\.[A-Za-z0-9]+)$/.test(t) ||
+    /^[\w.@+~-]+(?:[\\/][\w.@+~-]+)+$/.test(t)
+  )
 }
 
 /** 文件图标（按扩展名）。 */

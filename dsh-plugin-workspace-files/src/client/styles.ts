@@ -177,6 +177,80 @@ const CSS = `
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* ── Markdown 渲染 ──────────────────────────────────────── */
+.wf-md {
+  font-size: 13px;
+  line-height: 1.7;
+  font-family: inherit;
+  color: var(--dsw-alias-label-primary);
+  word-break: break-word;
+}
+.wf-md h1, .wf-md h2, .wf-md h3, .wf-md h4, .wf-md h5, .wf-md h6 {
+  margin: 16px 0 8px;
+  line-height: 1.3;
+  color: var(--dsw-alias-label-primary);
+}
+.wf-md h1 { font-size: 20px; border-bottom: 1px solid var(--dsw-alias-border-l1); padding-bottom: 6px; }
+.wf-md h2 { font-size: 17px; border-bottom: 1px solid var(--dsw-alias-border-l1); padding-bottom: 4px; }
+.wf-md h3 { font-size: 15px; }
+.wf-md h4, .wf-md h5, .wf-md h6 { font-size: 13.5px; }
+.wf-md p { margin: 8px 0; }
+.wf-md ul, .wf-md ol { margin: 8px 0; padding-left: 22px; }
+.wf-md li { margin: 3px 0; }
+.wf-md a { color: var(--dsw-alias-brand-primary); text-decoration: none; }
+.wf-md a:hover { text-decoration: underline; }
+.wf-md blockquote {
+  margin: 10px 0;
+  padding: 2px 12px;
+  border-left: 3px solid var(--dsw-alias-brand-primary);
+  color: var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-fill-l2);
+  border-radius: 0 6px 6px 0;
+}
+.wf-md code {
+  font-family: var(--dsw-alias-font-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
+  font-size: 12px;
+  background: var(--dsw-alias-fill-l2);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.wf-md pre {
+  margin: 10px 0;
+  padding: 10px 12px;
+  background: var(--dsw-alias-fill-l2);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  overflow: auto;
+}
+.wf-md pre code {
+  background: transparent;
+  padding: 0;
+  display: block;
+  line-height: 1.6;
+}
+.wf-md table {
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 12.5px;
+}
+.wf-md th, .wf-md td {
+  border: 1px solid var(--dsw-alias-border-l2);
+  padding: 5px 10px;
+}
+.wf-md th {
+  background: var(--dsw-alias-fill-l2);
+  color: var(--dsw-alias-label-primary);
+}
+.wf-md hr {
+  border: 0;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+  margin: 14px 0;
+}
+.wf-md img {
+  max-width: 100%;
+  border-radius: 8px;
+}
+
 /* ── 文件夹浏览抽屉 ─────────────────────────────────────── */
 .wf-breadcrumb {
   display: flex;

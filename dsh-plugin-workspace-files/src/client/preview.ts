@@ -9,9 +9,10 @@
 import * as React from 'react'
 import { readFile } from './bridge'
 import { t } from './locales'
+import { isMarkdownPath, renderMarkdown } from './markdown'
 import { addRecent, closePreview, openPreview, prefsStore, previewStore, useStore } from './store'
 import type { SessionsFace, WorkspacesFace } from './types'
-import { basenameOf, isAbsolute, joinAbs, looksLikePath, relOf } from './paths'
+import { basenameOf, isAbsolute, isPathTitle, joinAbs, relOf } from './paths'
 
 /* ── 服务绑定（apply 时注入） ─────────────────────────────── */
 
@@ -35,7 +36,7 @@ function isUnder(abs: string, root: string): boolean {
 function resolveClickPath(cwd: string, title: string): string | null {
   if (title === '' || title === '.') return null
   if (isAbsolute(title)) return isUnder(title, cwd) ? title : null
-  if (!looksLikePath(title)) return null
+  if (!isPathTitle(title)) return null
   const abs = joinAbs(cwd, title)
   return isUnder(abs, cwd) ? abs : null
 }
@@ -56,11 +57,13 @@ export function installClickInterceptor(): () => void {
 
     const target = ev.target as Element | null
     if (target === null) return
+    // 插件自身 UI（头部按钮 / 抽屉）自己处理点击，绝不拦截
+    if (target.closest('.wf-folder-btn, .wf-drawer, .wf-drawer-backdrop') !== null) return
     const el = target.closest?.('button, a, [role="button"]') ?? null
     if (el === null) return
     const inProducedRow = el.closest('[data-produced-files-row]') !== null
     const title = el.getAttribute('title') ?? ''
-    if (!inProducedRow && !looksLikePath(title)) return
+    if (!inProducedRow && !isPathTitle(title)) return
     if (title === '') return
     const abs = resolveClickPath(cwd, title.trim())
     if (abs === null) return
@@ -125,11 +128,13 @@ export function PreviewDrawer(): React.ReactElement | null {
   const state = useStore(previewStore)
   const [load, setLoad] = React.useState<LoadState>({ status: 'idle', loadedBytes: 0 })
   const [copied, setCopied] = React.useState(false)
+  const [mode, setMode] = React.useState<'render' | 'raw'>('render')
   const closeRef = React.useRef<HTMLButtonElement | null>(null)
 
   React.useEffect(() => {
     if (!state.open) return
     setLoad({ status: 'loading', loadedBytes: 0 })
+    setMode('render')
     const controller = new AbortController()
     void readFile(state.root, state.relPath, 0, LOAD_CHUNK, controller.signal)
       .then((r) => {
@@ -175,6 +180,8 @@ export function PreviewDrawer(): React.ReactElement | null {
 
   const rel = state.relPath
   const lines = load.content === undefined ? 0 : load.content.split('\n').length
+  const md = isMarkdownPath(rel)
+  const showMdRender = md && mode === 'render' && load.content !== undefined
 
   const loadMore = (): void => {
     const nextOffset = load.loadedBytes
@@ -247,6 +254,17 @@ export function PreviewDrawer(): React.ReactElement | null {
         ),
         state.fromBrowser
           ? React.createElement('button', { type: 'button', className: 'wf-btn', onClick: closePreview }, t('preview.back'))
+          : null,
+        md && load.content !== undefined
+          ? React.createElement(
+              'button',
+              {
+                type: 'button',
+                className: 'wf-btn',
+                onClick: () => setMode((m) => (m === 'render' ? 'raw' : 'render')),
+              },
+              mode === 'render' ? t('preview.raw') : t('preview.rendered'),
+            )
           : null,
         React.createElement(
           'button',
@@ -323,22 +341,31 @@ export function PreviewDrawer(): React.ReactElement | null {
                       : null,
                   ),
                 )
-              : React.createElement(
-                  'div',
-                  { className: 'wf-drawer-body' },
-                  React.createElement(
-                    'pre',
-                    { className: 'wf-code' },
-                    (load.content ?? '').split('\n').map((line, i) =>
-                      React.createElement(
-                        'div',
-                        { className: 'wf-code-line', key: i },
-                        React.createElement('span', { className: 'wf-line-no' }, String(i + 1)),
-                        React.createElement('span', { className: 'wf-line-content' }, ...highlightLine(line)),
+              : showMdRender
+                ? React.createElement(
+                    'div',
+                    { className: 'wf-drawer-body wf-body-plain' },
+                    React.createElement('div', {
+                      className: 'wf-md',
+                      dangerouslySetInnerHTML: { __html: renderMarkdown(load.content ?? '') },
+                    }),
+                  )
+                : React.createElement(
+                    'div',
+                    { className: 'wf-drawer-body' },
+                    React.createElement(
+                      'pre',
+                      { className: 'wf-code' },
+                      (load.content ?? '').split('\n').map((line, i) =>
+                        React.createElement(
+                          'div',
+                          { className: 'wf-code-line', key: i },
+                          React.createElement('span', { className: 'wf-line-no' }, String(i + 1)),
+                          React.createElement('span', { className: 'wf-line-content' }, ...highlightLine(line)),
+                        ),
                       ),
                     ),
                   ),
-                ),
       // 底部：加载更多
       load.status === 'done' && load.truncated === true
         ? React.createElement(
