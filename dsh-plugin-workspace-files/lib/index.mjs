@@ -97,21 +97,25 @@ function saveConfig(next) {
 }
 /**
 * 校验目标路径位于边界内。
-* 边界：默认 = root 本身；allowOutsideCwd=true 时 = 宿主主目录。
+* 边界：默认 = root 本身；allowOutsideCwd=true 时 = root 本身 + 宿主主目录。
+* 这样即使工作区不在主目录下（如 D:\code\project），开启“允许浏览工作区之外”
+* 也不会把原本工作区内的合法访问误杀。
 * realpath 复核：目标存在时解析符号链接，链接指向边界外一律拒绝。
 */
 async function guardPath(root, target) {
 	const absRoot = resolve(root);
 	const abs = resolve(absRoot, target);
-	const boundary = config.allowOutsideCwd ? resolve(homedir()) : absRoot;
-	const within = (candidate) => candidate === boundary || candidate.startsWith(boundary + sep);
-	if (!within(abs)) return {
+	const home = resolve(homedir());
+	const withinRoot = (candidate) => candidate === absRoot || candidate.startsWith(absRoot + sep);
+	const withinHome = (candidate) => config.allowOutsideCwd && (candidate === home || candidate.startsWith(home + sep));
+	if (!withinRoot(abs) && !withinHome(abs)) return {
 		ok: false,
 		status: 403,
 		error: "越权：路径超出允许范围"
 	};
 	try {
-		if (!within(await realpath(abs))) return {
+		const real = await realpath(abs);
+		if (!withinRoot(real) && !withinHome(real)) return {
 			ok: false,
 			status: 403,
 			error: "越权：符号链接指向允许范围之外"
@@ -272,15 +276,20 @@ async function handleRead(req, res) {
 			return;
 		}
 		try {
-			const buf = await (await open(guarded.abs, "r")).readFile();
-			const mime = ext === ".svg" ? "image/svg+xml" : `image/${ext.slice(1)}`;
-			sendJson(res, 200, {
-				ok: true,
-				path: guarded.abs,
-				size,
-				binary: false,
-				imageDataUrl: `data:${mime};base64,${buf.toString("base64")}`
-			});
+			const handle = await open(guarded.abs, "r");
+			try {
+				const buf = await handle.readFile();
+				const mime = ext === ".svg" ? "image/svg+xml" : `image/${ext.slice(1)}`;
+				sendJson(res, 200, {
+					ok: true,
+					path: guarded.abs,
+					size,
+					binary: false,
+					imageDataUrl: `data:${mime};base64,${buf.toString("base64")}`
+				});
+			} finally {
+				await handle.close();
+			}
 			return;
 		} catch {
 			sendJson(res, 500, {
@@ -308,6 +317,7 @@ async function handleRead(req, res) {
 			path: guarded.abs,
 			size,
 			content: "",
+			bytesRead: 0,
 			truncated: false,
 			encoding: "utf8"
 		});
@@ -333,6 +343,7 @@ async function handleRead(req, res) {
 				path: guarded.abs,
 				size,
 				content: chunk.toString("utf8"),
+				bytesRead,
 				truncated: offset + bytesRead < size,
 				encoding: "utf8"
 			});

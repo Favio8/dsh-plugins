@@ -468,20 +468,13 @@ const CSS = `
 }
 `
 
-let injected = false
-
-/** 注入插件样式（幂等；重复注入有 data-plugin-css 守卫）。 */
+/** 注入插件样式（幂等；每次检查 DOM，插件停止后再次启用也能恢复样式）。 */
 export function injectStyles(): void {
-  if (injected) return
   if (typeof document === 'undefined') return
-  if (document.querySelector('style[data-plugin-css="dsh-plugin-workspace-files"]') !== null) {
-    injected = true
-    return
-  }
+  if (document.querySelector('style[data-plugin-css="dsh-plugin-workspace-files"]') !== null) return
   const tag = document.createElement('style')
   tag.dataset.plugin = 'dsh-plugin-workspace-files'
   tag.dataset.pluginCss = 'dsh-plugin-workspace-files'
   tag.textContent = CSS
   document.head.appendChild(tag)
-  injected = true
 }

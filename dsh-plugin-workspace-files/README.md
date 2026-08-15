@@ -40,7 +40,7 @@ powershell -ExecutionPolicy Bypass -File ..\relaunch-web.ps1
 | 忽略规则 | localStorage | 逗号分隔；与内置 `node_modules,.git,dist,build,out,.next` 合并 |
 | 最近引用条数 | localStorage | `@` 菜单置顶数量（1–10） |
 | 预览大小上限 | Host `~/.dsh/plugins/workspace-files.json` | 文本单次读取上限（服务端强制，64KB–8MB） |
-| 允许浏览工作区之外 | Host 同上 | 默认关；开启后读取边界放宽到主目录 |
+| 允许浏览工作区之外 | Host 同上 | 默认关；开启后读取边界放宽到主目录（工作区根目录始终可用） |
 
 ## 架构与安全
 

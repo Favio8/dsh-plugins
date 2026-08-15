@@ -70,6 +70,7 @@ function ChatJumpRail() {
 		let containerRO = null;
 		let rootObserver = null;
 		let raf = 0;
+		let scrollRaf = 0;
 		const collectDots = () => {
 			if (container === null) return [];
 			return Array.from(container.querySelectorAll(USER_SEL)).map((el, i) => ({
@@ -116,11 +117,19 @@ function ChatJumpRail() {
 			else break;
 			setActiveKey(current);
 		};
+		const handleScroll = () => {
+			cancelAnimationFrame(scrollRaf);
+			scrollRaf = requestAnimationFrame(computeActive);
+		};
 		const refresh = () => {
 			cancelAnimationFrame(raf);
 			raf = requestAnimationFrame(() => {
 				if (container === null) return;
-				setDots(collectDots());
+				const nextDots = collectDots();
+				setDots((prev) => {
+					if (prev.length === nextDots.length && prev.every((d, i) => d.key === nextDots[i].key)) return prev;
+					return nextDots;
+				});
 				const r = container.getBoundingClientRect();
 				setRect({
 					left: r.left + horizontalInset(),
@@ -140,7 +149,7 @@ function ChatJumpRail() {
 			});
 			containerRO = new ResizeObserver(refresh);
 			containerRO.observe(c);
-			c.addEventListener("scroll", computeActive, { passive: true });
+			c.addEventListener("scroll", handleScroll, { passive: true });
 			window.addEventListener("resize", refresh);
 			refresh();
 		};
@@ -149,7 +158,9 @@ function ChatJumpRail() {
 			containerObserver = null;
 			containerRO?.disconnect();
 			containerRO = null;
-			if (container !== null) container.removeEventListener("scroll", computeActive);
+			if (container !== null) container.removeEventListener("scroll", handleScroll);
+			cancelAnimationFrame(scrollRaf);
+			scrollRaf = 0;
 			window.removeEventListener("resize", refresh);
 			container = null;
 			containerRef.current = null;
@@ -170,12 +181,14 @@ function ChatJumpRail() {
 		rootObserver.observe(document.body, {
 			childList: true,
 			subtree: true,
-			attributes: true
+			attributes: true,
+			attributeFilter: ["class", "style"]
 		});
 		return () => {
 			detach();
 			rootObserver?.disconnect();
 			cancelAnimationFrame(raf);
+			cancelAnimationFrame(scrollRaf);
 		};
 	}, []);
 	if (rect === null || dots.length < MIN_DOTS) return null;
@@ -241,20 +254,14 @@ const CSS = `
   transform: scale(1.2);
 }
 `;
-let injected = false;
 function injectStyles() {
-	if (injected) return;
 	if (typeof document === "undefined") return;
-	if (document.querySelector("style[data-plugin-css=\"dsh-plugin-chat-jump\"]") !== null) {
-		injected = true;
-		return;
-	}
+	if (document.querySelector("style[data-plugin-css=\"dsh-plugin-chat-jump\"]") !== null) return;
 	const tag = document.createElement("style");
 	tag.dataset.plugin = "dsh-plugin-chat-jump";
 	tag.dataset.pluginCss = "dsh-plugin-chat-jump";
 	tag.textContent = CSS;
 	document.head.appendChild(tag);
-	injected = true;
 }
 //#endregion
 exports.ChatJumpRail = ChatJumpRail;

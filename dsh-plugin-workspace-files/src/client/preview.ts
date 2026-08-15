@@ -129,6 +129,7 @@ export function PreviewDrawer(): React.ReactElement | null {
   const [load, setLoad] = React.useState<LoadState>({ status: 'idle', loadedBytes: 0 })
   const [copied, setCopied] = React.useState(false)
   const [mode, setMode] = React.useState<'render' | 'raw'>('render')
+  const [retry, setRetry] = React.useState(0)
   const closeRef = React.useRef<HTMLButtonElement | null>(null)
 
   React.useEffect(() => {
@@ -146,7 +147,7 @@ export function PreviewDrawer(): React.ReactElement | null {
             imageDataUrl: r.imageDataUrl,
             size: r.size,
             truncated: r.truncated,
-            loadedBytes: r.content?.length ?? 0,
+            loadedBytes: r.bytesRead ?? r.content?.length ?? 0,
           })
         } else {
           setLoad({ status: 'error', error: r.error ?? '未知错误', loadedBytes: 0 })
@@ -157,7 +158,7 @@ export function PreviewDrawer(): React.ReactElement | null {
         setLoad({ status: 'error', error: String(error), loadedBytes: 0 })
       })
     return () => controller.abort()
-  }, [state.open, state.root, state.relPath])
+  }, [state.open, state.root, state.relPath, retry])
 
   // ESC 关闭 + 焦点管理
   React.useEffect(() => {
@@ -195,7 +196,7 @@ export function PreviewDrawer(): React.ReactElement | null {
           imageDataUrl: r.imageDataUrl,
           size: r.size,
           truncated: r.truncated,
-          loadedBytes: nextOffset + (r.content?.length ?? 0),
+          loadedBytes: nextOffset + (r.bytesRead ?? r.content?.length ?? 0),
         }))
       } else {
         setLoad((prev) => ({ ...prev, status: 'error', error: r.error ?? '未知错误' }))
@@ -310,7 +311,10 @@ export function PreviewDrawer(): React.ReactElement | null {
                   {
                     type: 'button',
                     className: 'wf-btn',
-                    onClick: () => setLoad({ status: 'idle', loadedBytes: 0 }),
+                    onClick: () => {
+                      setLoad({ status: 'idle', loadedBytes: 0 })
+                      setRetry((n) => n + 1)
+                    },
                   },
                   t('preview.retry'),
                 ),

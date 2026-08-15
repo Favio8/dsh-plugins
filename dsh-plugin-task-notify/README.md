@@ -35,7 +35,7 @@ src/
 **Host 半**（`src/index.ts`）：
 - `ctx.on('agent/status')` 监听 running→idle，过滤子代理，取会话标题，弹飞书式置顶卡片（内嵌 PowerShell WinForms 脚本，fire-and-forget）。
 - 注册三个 HTTP 桥（绑定 127.0.0.1，仅本机可访问）：
-  - `GET  /task-notify/config` — 读桌面通知开关
+  - `GET  /task-notify/config` — 读完整通知配置
   - `POST /task-notify/config` — 写开关（`{ "desktop": boolean }`）
   - `POST /task-notify/test` — 立即弹测试卡片
 
@@ -82,7 +82,7 @@ dsh plugin --profile web add "link:<本插件文件夹绝对路径>"
 ## 已知限制
 
 - 桌面通知**仅支持 Windows**（PowerShell + WinForms 置顶卡片）；其他平台暂只有应用内 toast。
-- 置顶卡片是自绘窗口（非系统通知），不会进入 Windows 通知中心历史；样式固定为深色卡片。
+- 置顶卡片是自绘窗口（非系统通知），不会进入 Windows 通知中心历史；样式可在设置页配置（深/浅主题、强调色、位置、字体等）。
 - 只报"完成"，不报"出错"（`agent/error` 监听可作后续增强）。
 - 连续多轮快速完成有 2 秒防抖合并；toast 栈最多保留 4 条，自动消失。
 

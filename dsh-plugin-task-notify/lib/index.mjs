@@ -490,7 +490,7 @@ function apply(ctx) {
 		return next();
 	});
 	if (webServer !== void 0) {
-		webServer.register({
+		ctx.effect(() => webServer.register({
 			kind: "exact",
 			path: "/task-notify/config",
 			handler: (req, res) => {
@@ -559,8 +559,8 @@ function apply(ctx) {
 					error: "method not allowed"
 				});
 			}
-		});
-		webServer.register({
+		}));
+		ctx.effect(() => webServer.register({
 			kind: "exact",
 			path: "/task-notify/test",
 			handler: (req, res) => {
@@ -586,7 +586,7 @@ function apply(ctx) {
 					supported: true
 				});
 			}
-		});
+		}));
 	}
 }
 //#endregion

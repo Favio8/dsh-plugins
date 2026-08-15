@@ -35,14 +35,14 @@ export function createFileSource(sessions: SessionsFace, inputTriggers: InputTri
     async candidates(session, { query, signal }) {
       const cwd = cwdOf(sessions, session.sessionId)
       if (cwd === undefined) return []
-      // 解析斜杠层级：@src/components/ → 列出 src/components
-      const lastSlash = query.lastIndexOf('/')
+      // 解析层级：@src/components/ 或 @src\components\ → 列出对应目录
+      const lastSlash = Math.max(query.lastIndexOf('/'), query.lastIndexOf('\\'))
       const dirPart = lastSlash >= 0 ? query.slice(0, lastSlash + 1) : ''
       const rest = lastSlash >= 0 ? query.slice(lastSlash + 1) : query
 
       const recents = dirPart === '' ? getRecents(session.sessionId, cwd) : []
 
-      const list = await listDir(cwd, dirPart, false, signal)
+      const list = await listDir(cwd, dirPart.replace(/\\/g, '/'), false, signal)
       const ignore = ignoredNames()
       const entries = (list.entries ?? []).filter((e) => !ignore.has(e.name.toLowerCase()))
       const matched = entries.filter((e) =>

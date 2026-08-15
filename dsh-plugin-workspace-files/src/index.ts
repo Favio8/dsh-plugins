@@ -92,23 +92,27 @@ type GuardResult = { ok: true; abs: string } | { ok: false; status: number; erro
 
 /**
  * 校验目标路径位于边界内。
- * 边界：默认 = root 本身；allowOutsideCwd=true 时 = 宿主主目录。
+ * 边界：默认 = root 本身；allowOutsideCwd=true 时 = root 本身 + 宿主主目录。
+ * 这样即使工作区不在主目录下（如 D:\code\project），开启“允许浏览工作区之外”
+ * 也不会把原本工作区内的合法访问误杀。
  * realpath 复核：目标存在时解析符号链接，链接指向边界外一律拒绝。
  */
 async function guardPath(root: string, target: string): Promise<GuardResult> {
   const absRoot = resolve(root)
   const abs = resolve(absRoot, target)
-  const boundary = config.allowOutsideCwd ? resolve(homedir()) : absRoot
+  const home = resolve(homedir())
 
-  const within = (candidate: string): boolean =>
-    candidate === boundary || candidate.startsWith(boundary + sep)
+  const withinRoot = (candidate: string): boolean =>
+    candidate === absRoot || candidate.startsWith(absRoot + sep)
+  const withinHome = (candidate: string): boolean =>
+    config.allowOutsideCwd && (candidate === home || candidate.startsWith(home + sep))
 
-  if (!within(abs)) {
+  if (!withinRoot(abs) && !withinHome(abs)) {
     return { ok: false, status: 403, error: '越权：路径超出允许范围' }
   }
   try {
     const real = await realpath(abs)
-    if (!within(real)) {
+    if (!withinRoot(real) && !withinHome(real)) {
       return { ok: false, status: 403, error: '越权：符号链接指向允许范围之外' }
     }
   } catch {
@@ -248,15 +252,20 @@ async function handleRead(req: IncomingMessage, res: ServerResponse): Promise<vo
       return
     }
     try {
-      const buf = await (await open(guarded.abs, 'r')).readFile()
-      const mime = ext === '.svg' ? 'image/svg+xml' : `image/${ext.slice(1)}`
-      sendJson(res, 200, {
-        ok: true,
-        path: guarded.abs,
-        size,
-        binary: false,
-        imageDataUrl: `data:${mime};base64,${buf.toString('base64')}`,
-      })
+      const handle = await open(guarded.abs, 'r')
+      try {
+        const buf = await handle.readFile()
+        const mime = ext === '.svg' ? 'image/svg+xml' : `image/${ext.slice(1)}`
+        sendJson(res, 200, {
+          ok: true,
+          path: guarded.abs,
+          size,
+          binary: false,
+          imageDataUrl: `data:${mime};base64,${buf.toString('base64')}`,
+        })
+      } finally {
+        await handle.close()
+      }
       return
     } catch {
       sendJson(res, 500, { ok: false, error: '图片读取失败' })
@@ -277,7 +286,7 @@ async function handleRead(req: IncomingMessage, res: ServerResponse): Promise<vo
     ? Math.min(limitRaw, config.maxPreviewBytes)
     : config.maxPreviewBytes
   if (offset >= size) {
-    sendJson(res, 200, { ok: true, path: guarded.abs, size, content: '', truncated: false, encoding: 'utf8' })
+    sendJson(res, 200, { ok: true, path: guarded.abs, size, content: '', bytesRead: 0, truncated: false, encoding: 'utf8' })
     return
   }
   try {
@@ -296,6 +305,7 @@ async function handleRead(req: IncomingMessage, res: ServerResponse): Promise<vo
         path: guarded.abs,
         size,
         content: chunk.toString('utf8'),
+        bytesRead,
         truncated: offset + bytesRead < size,
         encoding: 'utf8',
       })

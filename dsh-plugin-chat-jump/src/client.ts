@@ -65,6 +65,7 @@ export function ChatJumpRail(): React.ReactElement | null {
     let containerRO: ResizeObserver | null = null
     let rootObserver: MutationObserver | null = null
     let raf = 0
+    let scrollRaf = 0
 
     const collectDots = (): Dot[] => {
       if (container === null) return []
@@ -123,11 +124,25 @@ export function ChatJumpRail(): React.ReactElement | null {
       setActiveKey(current)
     }
 
+    const handleScroll = (): void => {
+      cancelAnimationFrame(scrollRaf)
+      scrollRaf = requestAnimationFrame(computeActive)
+    }
+
     const refresh = (): void => {
       cancelAnimationFrame(raf)
       raf = requestAnimationFrame(() => {
         if (container === null) return
-        setDots(collectDots())
+        const nextDots = collectDots()
+        setDots((prev) => {
+          if (
+            prev.length === nextDots.length &&
+            prev.every((d, i) => d.key === nextDots[i].key)
+          ) {
+            return prev
+          }
+          return nextDots
+        })
         const r = container.getBoundingClientRect()
         setRect({ left: r.left + horizontalInset(), top: r.top, height: r.height })
         computeActive()
@@ -142,7 +157,7 @@ export function ChatJumpRail(): React.ReactElement | null {
       // 侧边栏收回/展开会改变容器尺寸与位置 → ResizeObserver 同步
       containerRO = new ResizeObserver(refresh)
       containerRO.observe(c)
-      c.addEventListener('scroll', computeActive, { passive: true })
+      c.addEventListener('scroll', handleScroll, { passive: true })
       window.addEventListener('resize', refresh)
       refresh()
     }
@@ -152,7 +167,9 @@ export function ChatJumpRail(): React.ReactElement | null {
       containerObserver = null
       containerRO?.disconnect()
       containerRO = null
-      if (container !== null) container.removeEventListener('scroll', computeActive)
+      if (container !== null) container.removeEventListener('scroll', handleScroll)
+      cancelAnimationFrame(scrollRaf)
+      scrollRaf = 0
       window.removeEventListener('resize', refresh)
       container = null
       containerRef.current = null
@@ -176,12 +193,18 @@ export function ChatJumpRail(): React.ReactElement | null {
 
     find()
     rootObserver = new MutationObserver(find)
-    rootObserver.observe(document.body, { childList: true, subtree: true, attributes: true })
+    rootObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class', 'style'],
+    })
 
     return () => {
       detach()
       rootObserver?.disconnect()
       cancelAnimationFrame(raf)
+      cancelAnimationFrame(scrollRaf)
     }
   }, [])
 
@@ -255,19 +278,12 @@ const CSS = `
 }
 `
 
-let injected = false
-
 function injectStyles(): void {
-  if (injected) return
   if (typeof document === 'undefined') return
-  if (document.querySelector('style[data-plugin-css="dsh-plugin-chat-jump"]') !== null) {
-    injected = true
-    return
-  }
+  if (document.querySelector('style[data-plugin-css="dsh-plugin-chat-jump"]') !== null) return
   const tag = document.createElement('style')
   tag.dataset.plugin = 'dsh-plugin-chat-jump'
   tag.dataset.pluginCss = 'dsh-plugin-chat-jump'
   tag.textContent = CSS
   document.head.appendChild(tag)
-  injected = true
 }

@@ -816,21 +816,15 @@ const CSS = `
   font-variant-numeric: tabular-nums;
 }
 `;
-let injected = false;
-/** 注入插件样式（幂等；重复注入有 data-plugin-css 守卫）。 */
+/** 注入插件样式（幂等；每次检查 DOM，插件停止后再次启用也能恢复样式）。 */
 function injectStyles() {
-	if (injected) return;
 	if (typeof document === "undefined") return;
-	if (document.querySelector("style[data-plugin-css=\"dsh-plugin-task-notify\"]") !== null) {
-		injected = true;
-		return;
-	}
+	if (document.querySelector("style[data-plugin-css=\"dsh-plugin-task-notify\"]") !== null) return;
 	const tag = document.createElement("style");
 	tag.dataset.plugin = "dsh-plugin-task-notify";
 	tag.dataset.pluginCss = "dsh-plugin-task-notify";
 	tag.textContent = CSS;
 	document.head.appendChild(tag);
-	injected = true;
 }
 //#endregion
 //#region src/client.ts

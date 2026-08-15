@@ -489,7 +489,7 @@ export function apply(ctx: Context): void {
 
   // ── 客户端设置页/设置行的 HTTP 桥 ─────────────────────────
   if (webServer !== undefined) {
-    webServer.register({
+    ctx.effect(() => webServer.register({
       kind: 'exact',
       path: '/task-notify/config',
       handler: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => {
@@ -560,9 +560,9 @@ export function apply(ctx: Context): void {
         }
         sendJson(res, 405, { ok: false, error: 'method not allowed' })
       },
-    })
+    }))
 
-    webServer.register({
+    ctx.effect(() => webServer.register({
       kind: 'exact',
       path: '/task-notify/test',
       handler: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => {
@@ -581,6 +581,6 @@ export function apply(ctx: Context): void {
         }
         sendJson(res, 200, { ok: true, supported: true })
       },
-    })
+    }))
   }
 }

@@ -416,11 +416,11 @@ function createFileSource(sessions, inputTriggers) {
 		async candidates(session, { query, signal }) {
 			const cwd = cwdOf(sessions, session.sessionId);
 			if (cwd === void 0) return [];
-			const lastSlash = query.lastIndexOf("/");
+			const lastSlash = Math.max(query.lastIndexOf("/"), query.lastIndexOf("\\"));
 			const dirPart = lastSlash >= 0 ? query.slice(0, lastSlash + 1) : "";
 			const rest = lastSlash >= 0 ? query.slice(lastSlash + 1) : query;
 			const recents = dirPart === "" ? getRecents(session.sessionId, cwd) : [];
-			const list = await listDir(cwd, dirPart, false, signal);
+			const list = await listDir(cwd, dirPart.replace(/\\/g, "/"), false, signal);
 			const ignore = ignoredNames();
 			const matched = (list.entries ?? []).filter((e) => !ignore.has(e.name.toLowerCase())).filter((e) => e.name.toLowerCase().startsWith(rest.toLowerCase()));
 			const dirs = matched.filter((e) => e.kind === "dir");
@@ -2473,6 +2473,7 @@ function PreviewDrawer() {
 	});
 	const [copied, setCopied] = react.useState(false);
 	const [mode, setMode] = react.useState("render");
+	const [retry, setRetry] = react.useState(0);
 	const closeRef = react.useRef(null);
 	react.useEffect(() => {
 		if (!state.open) return;
@@ -2490,7 +2491,7 @@ function PreviewDrawer() {
 				imageDataUrl: r.imageDataUrl,
 				size: r.size,
 				truncated: r.truncated,
-				loadedBytes: r.content?.length ?? 0
+				loadedBytes: r.bytesRead ?? r.content?.length ?? 0
 			});
 			else setLoad({
 				status: "error",
@@ -2509,7 +2510,8 @@ function PreviewDrawer() {
 	}, [
 		state.open,
 		state.root,
-		state.relPath
+		state.relPath,
+		retry
 	]);
 	react.useEffect(() => {
 		if (!state.open) return;
@@ -2545,7 +2547,7 @@ function PreviewDrawer() {
 				imageDataUrl: r.imageDataUrl,
 				size: r.size,
 				truncated: r.truncated,
-				loadedBytes: nextOffset + (r.content?.length ?? 0)
+				loadedBytes: nextOffset + (r.bytesRead ?? r.content?.length ?? 0)
 			}));
 			else setLoad((prev) => ({
 				...prev,
@@ -2599,10 +2601,13 @@ function PreviewDrawer() {
 	}, t("preview.openSystem")) : null), load.status === "loading" ? react.createElement("div", { className: "wf-drawer-body wf-body-plain" }, react.createElement("div", { className: "wf-body-hint" }, t("preview.loading"))) : load.status === "error" ? react.createElement("div", { className: "wf-drawer-body wf-body-plain" }, react.createElement("div", { className: "wf-body-hint" }, t("preview.error", { error: load.error ?? "" }), react.createElement("button", {
 		type: "button",
 		className: "wf-btn",
-		onClick: () => setLoad({
-			status: "idle",
-			loadedBytes: 0
-		})
+		onClick: () => {
+			setLoad({
+				status: "idle",
+				loadedBytes: 0
+			});
+			setRetry((n) => n + 1);
+		}
 	}, t("preview.retry")))) : load.imageDataUrl !== void 0 ? react.createElement("div", { className: "wf-drawer-body wf-body-plain" }, react.createElement("img", {
 		className: "wf-image",
 		src: load.imageDataUrl,
@@ -3202,21 +3207,15 @@ const CSS = `
   color: var(--dsw-alias-label-tertiary);
 }
 `;
-let injected = false;
-/** 注入插件样式（幂等；重复注入有 data-plugin-css 守卫）。 */
+/** 注入插件样式（幂等；每次检查 DOM，插件停止后再次启用也能恢复样式）。 */
 function injectStyles() {
-	if (injected) return;
 	if (typeof document === "undefined") return;
-	if (document.querySelector("style[data-plugin-css=\"dsh-plugin-workspace-files\"]") !== null) {
-		injected = true;
-		return;
-	}
+	if (document.querySelector("style[data-plugin-css=\"dsh-plugin-workspace-files\"]") !== null) return;
 	const tag = document.createElement("style");
 	tag.dataset.plugin = "dsh-plugin-workspace-files";
 	tag.dataset.pluginCss = "dsh-plugin-workspace-files";
 	tag.textContent = CSS;
 	document.head.appendChild(tag);
-	injected = true;
 }
 //#endregion
 //#region src/client.ts

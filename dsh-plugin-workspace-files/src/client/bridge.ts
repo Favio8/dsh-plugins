@@ -23,6 +23,8 @@ export interface ReadResult {
   ok: boolean
   path?: string
   content?: string
+  /** 本次实际读取的字节数（用于“加载更多”精确续读；UTF-8 多字节场景不能依赖 content.length）。 */
+  bytesRead?: number
   binary?: boolean
   truncated?: boolean
   size?: number
