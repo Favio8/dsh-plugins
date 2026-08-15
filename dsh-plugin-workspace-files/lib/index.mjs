@@ -66,6 +66,8 @@ const IMAGE_EXTS = /* @__PURE__ */ new Set([
 	".svg"
 ]);
 const LIST_CAP = 200;
+/** HTTP 桥 JSON body 大小上限（本地接口，防止异常请求占用内存）。 */
+const MAX_JSON_BODY_BYTES = 65536;
 const DSH_HOME = process.env.DSH_HOME ?? join(homedir(), ".dsh");
 const CONFIG_DIR = join(DSH_HOME, "plugins");
 const CONFIG_PATH = join(CONFIG_DIR, "workspace-files.json");
@@ -133,10 +135,18 @@ function sendJson(res, status, body) {
 function readJsonBody(req) {
 	return new Promise((resolveBody) => {
 		let data = "";
+		let tooLarge = false;
 		req.on("data", (chunk) => {
+			if (tooLarge) return;
 			data += chunk.toString("utf8");
+			if (Buffer.byteLength(data, "utf8") > MAX_JSON_BODY_BYTES) {
+				tooLarge = true;
+				resolveBody(null);
+				req.destroy();
+			}
 		});
 		req.on("end", () => {
+			if (tooLarge) return;
 			try {
 				resolveBody(JSON.parse(data));
 			} catch {

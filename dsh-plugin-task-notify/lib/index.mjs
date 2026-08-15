@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 //#region src/sound.ts
@@ -185,17 +185,17 @@ function sanitizeConfig(raw) {
 const DSH_HOME = process.env.DSH_HOME ?? join(homedir(), ".dsh");
 const CONFIG_DIR = join(DSH_HOME, "plugins");
 const CONFIG_PATH = join(CONFIG_DIR, "task-notify.json");
-const SCRIPT_PATH = join(tmpdir(), "dsh-task-notify-popup.ps1");
 const SOUND_DIR = join(tmpdir(), "dsh-task-notify-sound");
-const WEB_URL = "http://127.0.0.1:3080";
+const WEB_URL = process.env.DSH_WEB_URL ?? "http://127.0.0.1:3080";
 const DEBOUNCE_MS = 2e3;
+/** HTTP 桥 JSON body 大小上限（本地接口，防止异常请求占用内存）。 */
+const MAX_JSON_BODY_BYTES = 65536;
 /** 会话标题过长时截断，避免卡片溢出。 */
 function truncateTitle(title, max = 26) {
 	return title.length > max ? `${title.slice(0, max)}…` : title;
 }
 /** 阻塞等待用户输入/审批的工具：出现 tool/call 即代表等待开始。 */
 const BLOCKING_TOOLS = /* @__PURE__ */ new Set(["ask_user_question", "exit_plan_mode"]);
-let lastWaitNotifyAt = 0;
 /** 从 tool/call 参数里提取可读的等待说明（问题文本 / 计划标题）。 */
 function waitBody(name, argsRaw) {
 	try {
@@ -216,13 +216,16 @@ function waitBody(name, argsRaw) {
 	return name === "ask_user_question" ? "智能体向你提出了一个问题，需要你回答" : "智能体提交了计划，等待你审批";
 }
 /** 等待输入/审批提醒：与完成通知共用通道（卡片+声音），独立防抖。 */
-function fireWaitNotify(title, body) {
-	if (!config.desktop && !config.sound) return;
-	const now = Date.now();
-	if (now - lastWaitNotifyAt < DEBOUNCE_MS) return;
-	lastWaitNotifyAt = now;
-	if (config.desktop) showPopup(title, body, WEB_URL, config.sound, config.soundType);
-	else if (config.sound) playSoundOnly(config.soundType);
+function createWaitNotifier() {
+	let lastWaitNotifyAt = 0;
+	return (title, body) => {
+		if (!config.desktop && !config.sound) return;
+		const now = Date.now();
+		if (now - lastWaitNotifyAt < DEBOUNCE_MS) return;
+		lastWaitNotifyAt = now;
+		if (config.desktop) showPopup(title, body, WEB_URL, config.sound, config.soundType);
+		else if (config.sound) playSoundOnly(config.soundType);
+	};
 }
 /**
 * 飞书式弹窗：自定义无边框置顶卡片（WinForms），**不经过 Windows 通知管道**，
@@ -384,7 +387,7 @@ function playSoundOnly(soundType) {
 	if (process.platform !== "win32") return;
 	try {
 		const command = soundType === "system" ? `[System.Media.SystemSounds]::Asterisk.Play(); Start-Sleep -Milliseconds 900` : `$p = New-Object System.Media.SoundPlayer '${ensureSoundFile(soundType)}'; $p.PlaySync()`;
-		spawn("powershell.exe", [
+		const child = spawn("powershell.exe", [
 			"-NoProfile",
 			"-WindowStyle",
 			"Hidden",
@@ -393,7 +396,9 @@ function playSoundOnly(soundType) {
 		], {
 			windowsHide: true,
 			stdio: "ignore"
-		}).on("error", () => {});
+		});
+		child.unref();
+		child.on("error", () => {});
 	} catch (error) {
 		console.error("[task-notify] 播放提示音失败:", error);
 	}
@@ -401,16 +406,22 @@ function playSoundOnly(soundType) {
 /** 按当前配置弹飞书式置顶卡片（fire-and-forget，不阻塞宿主；不依赖系统通知开关）。 */
 function showPopup(title, text, url = WEB_URL, soundOn = false, soundType = "apple") {
 	if (process.platform !== "win32") return;
+	const scriptPath = join(tmpdir(), `dsh-task-notify-popup-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.ps1`);
+	const removeScript = () => {
+		try {
+			unlinkSync(scriptPath);
+		} catch {}
+	};
 	try {
-		writeFileSync(SCRIPT_PATH, POPUP_SCRIPT, "utf8");
-		spawn("powershell.exe", [
+		writeFileSync(scriptPath, POPUP_SCRIPT, "utf8");
+		const child = spawn("powershell.exe", [
 			"-NoProfile",
 			"-WindowStyle",
 			"Hidden",
 			"-ExecutionPolicy",
 			"Bypass",
 			"-File",
-			SCRIPT_PATH,
+			scriptPath,
 			title,
 			text,
 			url,
@@ -426,18 +437,32 @@ function showPopup(title, text, url = WEB_URL, soundOn = false, soundType = "app
 		], {
 			windowsHide: true,
 			stdio: "ignore"
-		}).on("error", () => {});
+		});
+		child.unref();
+		child.on("error", () => {
+			removeScript();
+		});
+		child.on("exit", removeScript);
 	} catch (error) {
 		console.error("[task-notify] 弹通知失败:", error);
+		removeScript();
 	}
 }
 function readJsonBody(req) {
 	return new Promise((resolve) => {
 		let data = "";
+		let tooLarge = false;
 		req.on("data", (chunk) => {
+			if (tooLarge) return;
 			data += chunk.toString("utf8");
+			if (Buffer.byteLength(data, "utf8") > MAX_JSON_BODY_BYTES) {
+				tooLarge = true;
+				resolve(null);
+				req.destroy();
+			}
 		});
 		req.on("end", () => {
+			if (tooLarge) return;
 			try {
 				resolve(JSON.parse(data));
 			} catch {
@@ -457,6 +482,7 @@ function apply(ctx) {
 	const sessionTitle = ctx.get("sessionTitle");
 	const running = /* @__PURE__ */ new Map();
 	let lastNotifyAt = 0;
+	const fireWaitNotify = createWaitNotifier();
 	const events = ctx;
 	events.on("agent/status", (payload) => {
 		const agent = payload.agent;

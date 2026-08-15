@@ -1,7 +1,7 @@
 /**
- * Markdown 渲染：marked + 轻量 HTML 消毒。
+ * Markdown 渲染：marked + DOM 级 HTML 消毒。
  * 内容来自用户自己的工作区文件，仍做基础消毒（去 script/style/iframe 等、
- * 事件属性、javascript: 协议），不引入完整 sanitizer 依赖。
+ * 事件属性、javascript: 协议）。浏览器端用 DOM 解析，不引入完整 sanitizer 依赖。
  */
 
 import { marked } from 'marked'
@@ -11,16 +11,32 @@ marked.setOptions({ gfm: true, breaks: true })
 const DANGEROUS_TAGS = ['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta', 'form']
 
 function sanitizeHtml(html: string): string {
-  let out = html
-  for (const tag of DANGEROUS_TAGS) {
-    out = out.replace(new RegExp(`<${tag}[^>]*>[\\s\\S]*?<\\/${tag}>`, 'gi'), '')
-    out = out.replace(new RegExp(`<${tag}[^>]*\\/?>`, 'gi'), '')
+  if (typeof document === 'undefined') {
+    // 非浏览器环境（理论上 client 半不会走到）：保守转义
+    return html.replace(/</g, '&lt;').replace(/>/g, '&gt;')
   }
-  // 事件属性
-  out = out.replace(/\s+on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
-  // javascript: 协议
-  out = out.replace(/\s(href|src)\s*=\s*(?:"|')?\s*javascript:[^"'>\s]*/gi, '')
-  return out
+  const root = document.createElement('div')
+  root.innerHTML = html
+
+  for (const tag of DANGEROUS_TAGS) {
+    for (const el of root.querySelectorAll(tag)) el.remove()
+  }
+
+  for (const el of root.querySelectorAll('*')) {
+    for (const attr of Array.from(el.attributes)) {
+      const name = attr.name.toLowerCase()
+      if (name.startsWith('on')) {
+        el.removeAttribute(attr.name)
+        continue
+      }
+      if ((name === 'href' || name === 'src' || name === 'xlink:href') &&
+        attr.value.trim().toLowerCase().startsWith('javascript:')) {
+        el.removeAttribute(attr.name)
+      }
+    }
+  }
+
+  return root.innerHTML
 }
 
 /** 渲染 Markdown 为消毒后的 HTML 字符串；失败时回退原文。 */

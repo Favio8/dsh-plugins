@@ -36,8 +36,10 @@ src/
 - `ctx.on('agent/status')` 监听 running→idle，过滤子代理，取会话标题，弹飞书式置顶卡片（内嵌 PowerShell WinForms 脚本，fire-and-forget）。
 - 注册三个 HTTP 桥（绑定 127.0.0.1，仅本机可访问）：
   - `GET  /task-notify/config` — 读完整通知配置
-  - `POST /task-notify/config` — 写开关（`{ "desktop": boolean }`）
+  - `POST /task-notify/config` — 写配置项（`{ "desktop": boolean, ... }`）
   - `POST /task-notify/test` — 立即弹测试卡片
+
+> 点击桌面卡片默认打开 `http://127.0.0.1:3080`；如 DSH 端口不同，可设置环境变量 `DSH_WEB_URL` 覆盖。
 
 **Client 半**：订阅 `sessions.list` 完成翻转 → 应用内 toast；设置行通过 `fetch` 调 HTTP 桥控制宿主开关。客户端不再使用浏览器 Notification API（系统级通知统一由宿主负责）。
 

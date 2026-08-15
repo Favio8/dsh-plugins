@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
@@ -123,12 +123,14 @@ interface AgentEvents {
 const DSH_HOME = process.env.DSH_HOME ?? join(homedir(), '.dsh')
 const CONFIG_DIR = join(DSH_HOME, 'plugins')
 const CONFIG_PATH = join(CONFIG_DIR, 'task-notify.json')
-const SCRIPT_PATH = join(tmpdir(), 'dsh-task-notify-popup.ps1')
 const SOUND_DIR = join(tmpdir(), 'dsh-task-notify-sound')
-const WEB_URL = 'http://127.0.0.1:3080'
+const WEB_URL = process.env.DSH_WEB_URL ?? 'http://127.0.0.1:3080'
 
 // 防抖窗口：连续完成（如排队消息逐条跑完）只弹一次
 const DEBOUNCE_MS = 2000
+
+/** HTTP 桥 JSON body 大小上限（本地接口，防止异常请求占用内存）。 */
+const MAX_JSON_BODY_BYTES = 64 * 1024
 
 /** 会话标题过长时截断，避免卡片溢出。 */
 function truncateTitle(title: string, max = 26): string {
@@ -137,8 +139,6 @@ function truncateTitle(title: string, max = 26): string {
 
 /** 阻塞等待用户输入/审批的工具：出现 tool/call 即代表等待开始。 */
 const BLOCKING_TOOLS = new Set(['ask_user_question', 'exit_plan_mode'])
-
-let lastWaitNotifyAt = 0
 
 /** 从 tool/call 参数里提取可读的等待说明（问题文本 / 计划标题）。 */
 function waitBody(name: string, argsRaw: string | undefined): string {
@@ -166,15 +166,18 @@ function waitBody(name: string, argsRaw: string | undefined): string {
 }
 
 /** 等待输入/审批提醒：与完成通知共用通道（卡片+声音），独立防抖。 */
-function fireWaitNotify(title: string, body: string): void {
-  if (!config.desktop && !config.sound) return
-  const now = Date.now()
-  if (now - lastWaitNotifyAt < DEBOUNCE_MS) return
-  lastWaitNotifyAt = now
-  if (config.desktop) {
-    showPopup(title, body, WEB_URL, config.sound, config.soundType)
-  } else if (config.sound) {
-    playSoundOnly(config.soundType)
+function createWaitNotifier(): (title: string, body: string) => void {
+  let lastWaitNotifyAt = 0
+  return (title, body) => {
+    if (!config.desktop && !config.sound) return
+    const now = Date.now()
+    if (now - lastWaitNotifyAt < DEBOUNCE_MS) return
+    lastWaitNotifyAt = now
+    if (config.desktop) {
+      showPopup(title, body, WEB_URL, config.sound, config.soundType)
+    } else if (config.sound) {
+      playSoundOnly(config.soundType)
+    }
   }
 }
 
@@ -350,6 +353,7 @@ function playSoundOnly(soundType: string): void {
       ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', command],
       { windowsHide: true, stdio: 'ignore' },
     )
+    child.unref()
     child.on('error', () => {
       // 播放失败静默忽略
     })
@@ -367,8 +371,19 @@ function showPopup(
   soundType: string = 'apple',
 ): void {
   if (process.platform !== 'win32') return
+  const scriptPath = join(
+    tmpdir(),
+    `dsh-task-notify-popup-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.ps1`,
+  )
+  const removeScript = (): void => {
+    try {
+      unlinkSync(scriptPath)
+    } catch {
+      // 临时文件可能已被清理，忽略
+    }
+  }
   try {
-    writeFileSync(SCRIPT_PATH, POPUP_SCRIPT, 'utf8')
+    writeFileSync(scriptPath, POPUP_SCRIPT, 'utf8')
     const child = spawn(
       'powershell.exe',
       [
@@ -378,7 +393,7 @@ function showPopup(
         '-ExecutionPolicy',
         'Bypass',
         '-File',
-        SCRIPT_PATH,
+        scriptPath,
         title,
         text,
         url,
@@ -394,21 +409,33 @@ function showPopup(
       ],
       { windowsHide: true, stdio: 'ignore' },
     )
+    child.unref()
     child.on('error', () => {
       // 弹出失败（如系统无 powershell）静默忽略，不影响宿主
+      removeScript()
     })
+    child.on('exit', removeScript)
   } catch (error) {
     console.error('[task-notify] 弹通知失败:', error)
+    removeScript()
   }
 }
 
 function readJsonBody(req: import('node:http').IncomingMessage): Promise<unknown> {
   return new Promise((resolve) => {
     let data = ''
+    let tooLarge = false
     req.on('data', (chunk: Buffer) => {
+      if (tooLarge) return
       data += chunk.toString('utf8')
+      if (Buffer.byteLength(data, 'utf8') > MAX_JSON_BODY_BYTES) {
+        tooLarge = true
+        resolve(null)
+        req.destroy()
+      }
     })
     req.on('end', () => {
+      if (tooLarge) return
       try {
         resolve(JSON.parse(data))
       } catch {
@@ -433,6 +460,7 @@ export function apply(ctx: Context): void {
     | undefined
   const running = new Map<string, boolean>()
   let lastNotifyAt = 0
+  const fireWaitNotify = createWaitNotifier()
   const events = ctx as unknown as AgentEvents
 
   // ── 任务完成检测：agent/status running→idle ─────────────────
