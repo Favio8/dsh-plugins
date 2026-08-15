@@ -38,8 +38,9 @@ export function FolderBrowser(): React.ReactElement | null {
   React.useEffect(() => {
     if (!state.open || state.root === '') return
     let cancelled = false
+    const controller = new AbortController()
     setLoading(true)
-    void listDir(state.root, relOf(state.currentPath, state.root), prefs.showHidden)
+    void listDir(state.root, relOf(state.currentPath, state.root), prefs.showHidden, controller.signal)
       .then((r) => {
         if (cancelled) return
         setListing(
@@ -56,6 +57,7 @@ export function FolderBrowser(): React.ReactElement | null {
       })
     return () => {
       cancelled = true
+      controller.abort()
     }
   }, [state.open, state.root, state.currentPath, state.rev, prefs.showHidden])
 

@@ -131,9 +131,12 @@ export function PreviewDrawer(): React.ReactElement | null {
   const [mode, setMode] = React.useState<'render' | 'raw'>('render')
   const [retry, setRetry] = React.useState(0)
   const closeRef = React.useRef<HTMLButtonElement | null>(null)
+  const loadMoreController = React.useRef<AbortController | null>(null)
 
   React.useEffect(() => {
     if (!state.open) return
+    loadMoreController.current?.abort()
+    loadMoreController.current = null
     setLoad({ status: 'loading', loadedBytes: 0 })
     setMode('render')
     const controller = new AbortController()
@@ -157,7 +160,11 @@ export function PreviewDrawer(): React.ReactElement | null {
         if (error instanceof DOMException && error.name === 'AbortError') return
         setLoad({ status: 'error', error: String(error), loadedBytes: 0 })
       })
-    return () => controller.abort()
+    return () => {
+      controller.abort()
+      loadMoreController.current?.abort()
+      loadMoreController.current = null
+    }
   }, [state.open, state.root, state.relPath, retry])
 
   // ESC 关闭 + 焦点管理
@@ -186,22 +193,35 @@ export function PreviewDrawer(): React.ReactElement | null {
 
   const loadMore = (): void => {
     const nextOffset = load.loadedBytes
+    loadMoreController.current?.abort()
+    const controller = new AbortController()
+    loadMoreController.current = controller
     setLoad((prev) => ({ ...prev, status: 'loading' }))
-    void readFile(state.root, rel, nextOffset, LOAD_CHUNK).then((r) => {
-      if (r.ok) {
-        setLoad((prev) => ({
-          status: 'done',
-          content: (prev.content ?? '') + (r.content ?? ''),
-          binary: r.binary,
-          imageDataUrl: r.imageDataUrl,
-          size: r.size,
-          truncated: r.truncated,
-          loadedBytes: nextOffset + (r.bytesRead ?? r.content?.length ?? 0),
-        }))
-      } else {
-        setLoad((prev) => ({ ...prev, status: 'error', error: r.error ?? '未知错误' }))
-      }
-    })
+    void readFile(state.root, rel, nextOffset, LOAD_CHUNK, controller.signal)
+      .then((r) => {
+        if (controller.signal.aborted) return
+        if (r.ok) {
+          setLoad((prev) => ({
+            status: 'done',
+            content: (prev.content ?? '') + (r.content ?? ''),
+            binary: r.binary,
+            imageDataUrl: r.imageDataUrl,
+            size: r.size,
+            truncated: r.truncated,
+            loadedBytes: nextOffset + (r.bytesRead ?? r.content?.length ?? 0),
+          }))
+        } else {
+          setLoad((prev) => ({ ...prev, status: 'error', error: r.error ?? '未知错误' }))
+        }
+      })
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === 'AbortError') return
+        if (controller.signal.aborted) return
+        setLoad((prev) => ({ ...prev, status: 'error', error: String(error) }))
+      })
+      .finally(() => {
+        if (loadMoreController.current === controller) loadMoreController.current = null
+      })
   }
 
   return React.createElement(

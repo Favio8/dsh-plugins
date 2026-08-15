@@ -490,8 +490,9 @@ function FolderBrowser() {
 	react.useEffect(() => {
 		if (!state.open || state.root === "") return;
 		let cancelled = false;
+		const controller = new AbortController();
 		setLoading(true);
-		listDir(state.root, relOf(state.currentPath, state.root), prefs.showHidden).then((r) => {
+		listDir(state.root, relOf(state.currentPath, state.root), prefs.showHidden, controller.signal).then((r) => {
 			if (cancelled) return;
 			setListing(r.ok ? {
 				entries: r.entries ?? [],
@@ -513,6 +514,7 @@ function FolderBrowser() {
 		});
 		return () => {
 			cancelled = true;
+			controller.abort();
 		};
 	}, [
 		state.open,
@@ -2480,8 +2482,11 @@ function PreviewDrawer() {
 	const [mode, setMode] = react.useState("render");
 	const [retry, setRetry] = react.useState(0);
 	const closeRef = react.useRef(null);
+	const loadMoreController = react.useRef(null);
 	react.useEffect(() => {
 		if (!state.open) return;
+		loadMoreController.current?.abort();
+		loadMoreController.current = null;
 		setLoad({
 			status: "loading",
 			loadedBytes: 0
@@ -2511,7 +2516,11 @@ function PreviewDrawer() {
 				loadedBytes: 0
 			});
 		});
-		return () => controller.abort();
+		return () => {
+			controller.abort();
+			loadMoreController.current?.abort();
+			loadMoreController.current = null;
+		};
 	}, [
 		state.open,
 		state.root,
@@ -2540,11 +2549,15 @@ function PreviewDrawer() {
 	const showMdRender = md && mode === "render" && load.content !== void 0;
 	const loadMore = () => {
 		const nextOffset = load.loadedBytes;
+		loadMoreController.current?.abort();
+		const controller = new AbortController();
+		loadMoreController.current = controller;
 		setLoad((prev) => ({
 			...prev,
 			status: "loading"
 		}));
-		readFile(state.root, rel, nextOffset, LOAD_CHUNK).then((r) => {
+		readFile(state.root, rel, nextOffset, LOAD_CHUNK, controller.signal).then((r) => {
+			if (controller.signal.aborted) return;
 			if (r.ok) setLoad((prev) => ({
 				status: "done",
 				content: (prev.content ?? "") + (r.content ?? ""),
@@ -2559,6 +2572,16 @@ function PreviewDrawer() {
 				status: "error",
 				error: r.error ?? "未知错误"
 			}));
+		}).catch((error) => {
+			if (error instanceof DOMException && error.name === "AbortError") return;
+			if (controller.signal.aborted) return;
+			setLoad((prev) => ({
+				...prev,
+				status: "error",
+				error: String(error)
+			}));
+		}).finally(() => {
+			if (loadMoreController.current === controller) loadMoreController.current = null;
 		});
 	};
 	return react.createElement("div", {
