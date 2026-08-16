@@ -268,9 +268,9 @@ span[data-decoration="chip"][title^="@"] > span {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 84px;
-  max-width: 84px;
-  padding: 0 5px;
+  width: 66px;
+  max-width: 66px;
+  padding: 0 1px;
   overflow: hidden;
   text-overflow: ellipsis;
   text-align: center;
@@ -279,9 +279,11 @@ span[data-decoration="chip"][title^="@"] > span {
   background: rgba(96, 165, 250, 0.16);
   box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.28);
   border-radius: 6px;
-  font-size: 11px;
+  font-size: 10px;
+  letter-spacing: -0.4px;
   line-height: 18px;
-  transform: translate(-50%, -50%);
+  /* 相对占位格向左微移 1px：右缘不再盖住 chip 后的自动空格。 */
+  transform: translate(calc(-50% - 1px), -50%);
 }
 span[data-decoration="chip"][title^="@"][data-invalid] > span {
   background: rgba(216, 97, 97, 0.18);
