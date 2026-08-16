@@ -96,12 +96,12 @@ export function createFileSource(sessions: SessionsFace, inputTriggers: InputTri
       const cwd = cwdOf(sessions, session.sessionId)
       if (cwd !== undefined) addRecent(session.sessionId, cwd, rel)
       // insert 型 chip：草稿中是一个真实引用块。label 以 @ 开头，供插件 CSS 精确命中；
-      // clipboard/发送均为 @<path>。
+      // label 使用完整相对路径，视觉超长省略，hover tooltip 可显示完整路径。
       return {
         insert: {
           source: 'file',
           ref: isDir ? `${rel}/` : rel,
-          label: `@${isDir ? `${basenameOf(rel)}/` : basenameOf(rel)}`,
+          label: `@${rel}${isDir ? '/' : ''}`,
           clipboardText: `@${rel}${isDir ? '/' : ''}`,
         },
       }

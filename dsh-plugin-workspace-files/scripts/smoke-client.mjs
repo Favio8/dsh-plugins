@@ -112,6 +112,17 @@ if (outcome.insert.label !== '@AGENTS.md') {
   process.exit(1)
 }
 console.log('✓ onPick 返回 insert chip:', outcome.insert.label, '→', outcome.insert.clipboardText)
+const nested = fileSource.onPick({
+  candidate: { name: 'AGENTS.md', description: 'src/AGENTS.md' },
+  session: { sessionId: 'smoke-session' },
+  position: 'leading',
+  via: 'menu',
+})
+if (nested?.insert?.label !== '@src/AGENTS.md' || nested.insert.clipboardText !== '@src/AGENTS.md') {
+  console.error('FAIL: 嵌套路径 chip label/clipboard 不是完整路径:', nested)
+  process.exit(1)
+}
+console.log('✓ 嵌套路径 chip 使用完整路径:', nested.insert.label)
 if (typeof fileSource.codec?.serialize !== 'function') {
   console.error('FAIL: @file source 缺少 codec.serialize')
   process.exit(1)

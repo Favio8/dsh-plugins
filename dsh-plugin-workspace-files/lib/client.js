@@ -491,7 +491,7 @@ function createFileSource(sessions, inputTriggers) {
 			return { insert: {
 				source: "file",
 				ref: isDir ? `${rel}/` : rel,
-				label: `@${isDir ? `${basenameOf(rel)}/` : basenameOf(rel)}`,
+				label: `@${rel}${isDir ? "/" : ""}`,
 				clipboardText: `@${rel}${isDir ? "/" : ""}`
 			} };
 		},
