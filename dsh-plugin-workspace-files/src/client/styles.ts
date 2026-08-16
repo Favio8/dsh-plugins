@@ -253,6 +253,36 @@ const CSS = `
   border-radius: 8px;
 }
 
+/* ── @file occurrence chip（桌面端清新浅蓝，完整显示文件名） ── */
+/* 官方 occurrence chip 是固定 4em 窄格 + 居中裁剪；这里只放大 label 覆盖层，
+   保持父级占位宽度不变，避免影响 composer 的光标/文字对齐。 */
+span[data-decoration="chip"][title^="@"] {
+  background: rgba(96, 165, 250, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.28);
+  border-radius: 6px;
+}
+span[data-decoration="chip"][title^="@"] > span {
+  display: block;
+  box-sizing: border-box;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max-content;
+  max-width: min(220px, 60vw);
+  padding: 1px 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 6px;
+  background: rgba(96, 165, 250, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.30);
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  line-height: 18px;
+  transform: translate(-50%, -50%);
+  z-index: 1;
+}
+
 /* ── 文件夹浏览抽屉 ─────────────────────────────────────── */
 .wf-breadcrumb {
   display: flex;

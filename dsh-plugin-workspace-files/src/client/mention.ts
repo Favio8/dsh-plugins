@@ -95,12 +95,13 @@ export function createFileSource(sessions: SessionsFace, inputTriggers: InputTri
       const rel = raw.replace(/\/$/, '')
       const cwd = cwdOf(sessions, session.sessionId)
       if (cwd !== undefined) addRecent(session.sessionId, cwd, rel)
-      // insert 型 chip：草稿中是一个真实引用块，显示 basename；clipboard/发送为 @<path>。
+      // insert 型 chip：草稿中是一个真实引用块。label 以 @ 开头（供插件 CSS 精确命中），
+      // clipboard/发送均为 @<path>。
       return {
         insert: {
           source: 'file',
           ref: isDir ? `${rel}/` : rel,
-          label: isDir ? `${basenameOf(rel)}/` : basenameOf(rel),
+          label: `@${isDir ? `${basenameOf(rel)}/` : basenameOf(rel)}`,
           clipboardText: `@${rel}${isDir ? '/' : ''}`,
         },
       }
