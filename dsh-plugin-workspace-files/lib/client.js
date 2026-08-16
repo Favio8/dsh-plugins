@@ -483,10 +483,21 @@ function createFileSource(sessions, inputTriggers) {
 			];
 		},
 		onPick({ candidate, session }) {
-			const rel = candidate.description ?? candidate.name;
+			const raw = candidate.description ?? candidate.name;
+			const isDir = raw.endsWith("/");
+			const rel = raw.replace(/\/$/, "");
 			const cwd = cwdOf(sessions, session.sessionId);
-			if (cwd !== void 0) addRecent(session.sessionId, cwd, rel.replace(/\/$/, ""));
-			return { text: `${rel} ` };
+			if (cwd !== void 0) addRecent(session.sessionId, cwd, rel);
+			return { insert: {
+				source: "file",
+				ref: isDir ? `${rel}/` : rel,
+				label: isDir ? `${basenameOf(rel)}/` : basenameOf(rel),
+				clipboardText: `@${rel}${isDir ? "/" : ""}`
+			} };
+		},
+		codec: {
+			clipboardText: (ref) => `@${ref}`,
+			serialize: (ref) => Promise.resolve(`@${ref}`)
 		},
 		lexicon(session) {
 			const cwd = cwdOf(sessions, session.sessionId);

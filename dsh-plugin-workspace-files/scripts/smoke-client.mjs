@@ -72,6 +72,7 @@ const slotsStub = {
   inject: (_key, cb) => { cb(); return () => {} },
   register: () => () => {},
 }
+let fileSource = null
 const ctxStub = {
   effect: (cb) => {
     const cleanup = cb()
@@ -81,7 +82,7 @@ const ctxStub = {
     switch (name) {
       case 'slots': return slotsStub
       case 'sessions': return sessionsStub
-      case 'inputTriggers': return { registerSource: () => () => {} }
+      case 'inputTriggers': return { registerSource: (src) => { fileSource = src; return () => {} } }
       case 'locale': return { bind: () => () => '', register: () => () => {} }
       case 'workspaces': return { openPath: async () => {} }
       default: return undefined
@@ -90,5 +91,32 @@ const ctxStub = {
 }
 apply(ctxStub)
 console.log('✓ apply(ctx) 端到端执行通过（@ source + 点击拦截 + 槽位注册路径无异常）')
+
+// 验证 @file 选择产物是真正的 insert chip，且 codec 序列化为 @<path>。
+if (fileSource === null) {
+  console.error('FAIL: 未捕获到注册的 @file source')
+  process.exit(1)
+}
+const outcome = fileSource.onPick({
+  candidate: { name: 'AGENTS.md', description: 'AGENTS.md' },
+  session: { sessionId: 'smoke-session' },
+  position: 'leading',
+  via: 'menu',
+})
+if (outcome?.insert?.source !== 'file' || outcome.insert.ref !== 'AGENTS.md') {
+  console.error('FAIL: onPick 没有返回 insert 型文件引用')
+  process.exit(1)
+}
+console.log('✓ onPick 返回 insert chip:', outcome.insert.label, '→', outcome.insert.clipboardText)
+if (typeof fileSource.codec?.serialize !== 'function') {
+  console.error('FAIL: @file source 缺少 codec.serialize')
+  process.exit(1)
+}
+const serialized = await fileSource.codec.serialize('AGENTS.md', new AbortController().signal)
+if (serialized !== '@AGENTS.md') {
+  console.error('FAIL: codec 序列化结果不是 @AGENTS.md:', serialized)
+  process.exit(1)
+}
+console.log('✓ codec 提交序列化:', serialized)
 
 console.log('\nSMOKE TEST PASSED')

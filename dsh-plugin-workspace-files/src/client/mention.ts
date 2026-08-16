@@ -90,11 +90,24 @@ export function createFileSource(sessions: SessionsFace, inputTriggers: InputTri
       return [...recentCands, ...dirCands, ...fileCands]
     },
     onPick({ candidate, session }) {
-      const rel = candidate.description ?? candidate.name
+      const raw = candidate.description ?? candidate.name
+      const isDir = raw.endsWith('/')
+      const rel = raw.replace(/\/$/, '')
       const cwd = cwdOf(sessions, session.sessionId)
-      if (cwd !== undefined) addRecent(session.sessionId, cwd, rel.replace(/\/$/, ''))
-      // 目录以 / 结尾 → 保持可读性；文件加空格结束 token
-      return { text: `${rel} ` }
+      if (cwd !== undefined) addRecent(session.sessionId, cwd, rel)
+      // insert 型 chip：草稿中是一个真实引用块，显示 basename；clipboard/发送为 @<path>。
+      return {
+        insert: {
+          source: 'file',
+          ref: isDir ? `${rel}/` : rel,
+          label: isDir ? `${basenameOf(rel)}/` : basenameOf(rel),
+          clipboardText: `@${rel}${isDir ? '/' : ''}`,
+        },
+      }
+    },
+    codec: {
+      clipboardText: (ref) => `@${ref}`,
+      serialize: (ref) => Promise.resolve(`@${ref}`),
     },
     lexicon(session) {
       const cwd = cwdOf(sessions, session.sessionId)

@@ -54,6 +54,23 @@ export interface LocaleFace {
   bind(ns: string): (key: string, params?: Record<string, string | number>) => string
 }
 
+/** 官方 insert 型引用：草稿中是一个真实 occurrence chip。 */
+export interface ReferenceInsert {
+  source: string
+  ref: string
+  label: string
+  clipboardText: string
+}
+
+/** 官方 ReferenceCodec：clipboard/发送序列化。 */
+export interface ReferenceCodec {
+  clipboardText(ref: string): string
+  serialize(ref: string, signal: AbortSignal): Promise<string>
+}
+
+/** onPick 返回值：本插件使用 insert 型 chip（区别于普通 text）。 */
+export type TriggerPickOutcome = { insert: ReferenceInsert } | { text: string } | 'handled' | undefined
+
 /** 输入触发管线 source（对应官方 InputTriggerSource，仅本项目用到字段）。 */
 export interface TriggerSource {
   trigger: '/' | '@'
@@ -68,7 +85,8 @@ export interface TriggerSource {
     session: { sessionId: string }
     position: 'leading' | 'inline'
     via: 'menu' | 'space' | 'enter'
-  }): unknown
+  }): TriggerPickOutcome
+  codec?: ReferenceCodec
   lexicon?(session: { sessionId: string }): readonly string[] | undefined
   subscribeLexicon?(session: { sessionId: string }, listener: () => void): () => void
   warm?(session: { sessionId: string }): void

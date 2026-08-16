@@ -6,7 +6,7 @@ DeepSeek Harness **工作区文件体验**插件：把「文件」的引用、�
 
 | 功能 | 说明 |
 | --- | --- |
-| **`@` 引用文件** | 输入框输入 `@` 弹出文件菜单：**最近引用置顶** + 当前目录文件/目录 + **斜杠层级导航**（`@src/components/` 直达子目录）；选中写入相对路径随消息发送，agent 可直接 `read`；草稿中已引用路径呈 chip 装饰 |
+| **`@` 引用文件** | 输入框输入 `@` 弹出文件菜单：**最近引用置顶** + 当前目录文件/目录 + **斜杠层级导航**（`@src/components/` 直达子目录）；选中后插入真正的 **文件 chip**（显示 basename，整体删除/复制），提交时序列化为 `@相对路径` 随消息发送，agent 可直接 `read` |
 | **修改文件点击预览** | 会话「产物」chips / 散文文件提及 / 工具卡片中的文件路径，点击即在**右侧预览抽屉**查看内容（行号 + 极简高亮 + **Markdown 渲染**（`渲染/原文` 可切换）+ 图片直显 + 超长「加载更多」+ 复制路径 + 在系统中打开），不再跳系统资源管理器 |
 | **右上角项目文件夹** | 会话头部右端「📁 项目名」按钮 → **面包屑 + 目录列表**浏览（根 = 当前会话 cwd，切换会话自动重根），文件点击直达预览 |
 
@@ -50,7 +50,7 @@ powershell -ExecutionPolicy Bypass -File ..\relaunch-web.ps1
   - `GET /workspace-files/read?root=&path=&offset=&limit=` 读片段 / 图片 dataURL / 二进制判定
   - `GET|POST /workspace-files/config` 安全配置持久化
   - **root guard**：`root` 必须是当前 Host 已注册会话的 cwd（客户端不能自选根目录）；路径 `resolve` + `realpath` 后必须位于边界内（`allowOutsideCwd` 开启后额外允许主目录），大小写/符号链接 cwd 均已归一化，符号链接逃逸拒绝
-- **Client 半**（`src/client.ts`）：`@` source（`mention.ts`）、预览抽屉 + 点击拦截（`preview.ts`）、文件夹浏览（`browser.ts`）、头部按钮（`header.ts`）、设置页（`settings.ts`）；模块级 store（`store.ts`）只存叶子值，不持有 live 数据；所有副作用挂 `ctx.effect`。
+- **Client 半**（`src/client.ts`）：`@` source（`mention.ts`，insert-type 文件 chip + `codec` 序列化为 `@<path>`）、预览抽屉 + 点击拦截（`preview.ts`）、文件夹浏览（`browser.ts`）、头部按钮（`header.ts`）、设置页（`settings.ts`）；模块级 store（`store.ts`）只存叶子值，不持有 live 数据；所有副作用挂 `ctx.effect`。
 - 依赖注入：`inject: ['slots','sessions','inputTriggers','locale']`；`workspaces` 可选（无则隐藏「在系统中打开」）。
 
 ## 升级回归点（官方变更时检查）
