@@ -491,7 +491,7 @@ function createFileSource(sessions, inputTriggers) {
 			return { insert: {
 				source: "file",
 				ref: isDir ? `${rel}/` : rel,
-				label: isDir ? `${basenameOf(rel)}/` : basenameOf(rel),
+				label: `@${isDir ? `${basenameOf(rel)}/` : basenameOf(rel)}`,
 				clipboardText: `@${rel}${isDir ? "/" : ""}`
 			} };
 		},
@@ -5364,6 +5364,41 @@ const CSS = `
 .wf-md img {
   max-width: 100%;
   border-radius: 8px;
+}
+
+/* ── @file occurrence chip（桌面端清新浅蓝，单框、不溢出） ── */
+/* 官方 occurrence chip 是 4em 窄格 + 居中裁剪。这里只微调 label 的可见区域：
+   - 父级 chip 保持官方占位宽度，光标/文字对齐不受影响；
+   - 只有父级 chip 绘制浅蓝底色，避免“框套框”；
+   - label 宽度限定在 88px，超出用省略号；hover 时浏览器仍显示完整 title。 */
+span[data-decoration="chip"][title^="@"] {
+  background: transparent;
+  box-shadow: none;
+}
+span[data-decoration="chip"][title^="@"] > span {
+  display: block;
+  box-sizing: border-box;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 84px;
+  max-width: 84px;
+  padding: 0 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-primary);
+  background: rgba(96, 165, 250, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.28);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 18px;
+  transform: translate(-50%, -50%);
+}
+span[data-decoration="chip"][title^="@"][data-invalid] > span {
+  background: rgba(216, 97, 97, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(216, 97, 97, 0.32);
 }
 
 /* ── 文件夹浏览抽屉 ─────────────────────────────────────── */

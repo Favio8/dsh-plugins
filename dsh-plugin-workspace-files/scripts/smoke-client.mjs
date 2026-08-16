@@ -107,6 +107,10 @@ if (outcome?.insert?.source !== 'file' || outcome.insert.ref !== 'AGENTS.md') {
   console.error('FAIL: onPick 没有返回 insert 型文件引用')
   process.exit(1)
 }
+if (outcome.insert.label !== '@AGENTS.md') {
+  console.error('FAIL: chip label 不是 @AGENTS.md:', outcome.insert.label)
+  process.exit(1)
+}
 console.log('✓ onPick 返回 insert chip:', outcome.insert.label, '→', outcome.insert.clipboardText)
 if (typeof fileSource.codec?.serialize !== 'function') {
   console.error('FAIL: @file source 缺少 codec.serialize')
