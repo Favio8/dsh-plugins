@@ -1,14 +1,14 @@
 /**
  * F1：@ 文件引用 source（注册进官方 input-trigger 管线）。
  *
- * - 菜单候选：最近引用（置顶）+ 当前层文件/目录；
+ * - 菜单候选：最近引用（置顶，按 query 过滤）+ 当前层文件/目录；
  * - 斜杠层级导航：@src/components/ 直接进入子目录；
  * - onPick → { text: '<相对路径> ' }，随普通 prompt 发送，agent 直接可读；
  * - lexicon：返回本会话最近引用的相对路径，草稿中 @<路径> 呈 chip 装饰。
  */
 
 import { listDir } from './bridge'
-import { addRecent, getRecents, prefsStore } from './store'
+import { addRecent, getRecents, prefsStore, subscribeRecents } from './store'
 import type { InputTriggersFace, SessionsFace, TriggerSource } from './types'
 import { basenameOf, fileIcon, joinAbs, relOf } from './paths'
 import { t } from './locales'
@@ -27,6 +27,21 @@ function cwdOf(sessions: SessionsFace, sessionId: string): string | undefined {
   return sessions.list.getSnapshot().byId[sessionId]?.cwd
 }
 
+/** list 请求短 TTL 缓存：@ 菜单连续输入时避免重复请求同一目录。 */
+type CachedListResult = Awaited<ReturnType<typeof listDir>>
+const listCache = new Map<string, { at: number; result: CachedListResult }>()
+const LIST_CACHE_TTL_MS = 2000
+
+async function cachedList(root: string, rel: string, signal?: AbortSignal): Promise<CachedListResult> {
+  const key = `${root}\u0000${rel}`
+  const cached = listCache.get(key)
+  const now = Date.now()
+  if (cached !== undefined && now - cached.at < LIST_CACHE_TTL_MS) return cached.result
+  const result = await listDir(root, rel, false, signal)
+  if (result.ok) listCache.set(key, { at: now, result })
+  return result
+}
+
 export function createFileSource(sessions: SessionsFace, inputTriggers: InputTriggersFace): () => void {
   const source: TriggerSource = {
     trigger: '@',
@@ -42,7 +57,7 @@ export function createFileSource(sessions: SessionsFace, inputTriggers: InputTri
 
       const recents = dirPart === '' ? getRecents(session.sessionId, cwd) : []
 
-      const list = await listDir(cwd, dirPart.replace(/\\/g, '/'), false, signal)
+      const list = await cachedList(cwd, dirPart.replace(/\\/g, '/'), signal)
       const ignore = ignoredNames()
       const entries = (list.entries ?? []).filter((e) => !ignore.has(e.name.toLowerCase()))
       const matched = entries.filter((e) =>
@@ -51,12 +66,17 @@ export function createFileSource(sessions: SessionsFace, inputTriggers: InputTri
       const dirs = matched.filter((e) => e.kind === 'dir')
       const files = matched.filter((e) => e.kind === 'file')
 
-      const recentCands = recents.map((rel) => ({
-        name: basenameOf(rel),
-        description: rel,
-        icon: '🕘',
-        hint: t('mention.recent'),
-      }))
+      const recentCands = recents
+        .filter((rel) => {
+          const target = rest.toLowerCase()
+          return target === '' || rel.toLowerCase().includes(target) || basenameOf(rel).toLowerCase().includes(target)
+        })
+        .map((rel) => ({
+          name: basenameOf(rel),
+          description: rel,
+          icon: '🕘',
+          hint: t('mention.recent'),
+        }))
       const dirCands = dirs.map((d) => ({
         name: d.name,
         description: `${relOf(d.path, cwd)}/`,
@@ -83,7 +103,18 @@ export function createFileSource(sessions: SessionsFace, inputTriggers: InputTri
       return recents.length > 0 ? recents : undefined
     },
     subscribeLexicon(_session, listener) {
-      return sessions.list.subscribe(listener)
+      const offSessions = sessions.list.subscribe(listener)
+      const offPrefs = prefsStore.subscribe(listener)
+      const offRecents = subscribeRecents(listener)
+      return () => {
+        offSessions()
+        offPrefs()
+        offRecents()
+      }
+    },
+    warm(session) {
+      const cwd = cwdOf(sessions, session.sessionId)
+      if (cwd !== undefined) void cachedList(cwd, '')
     },
   }
   return inputTriggers.registerSource(source)

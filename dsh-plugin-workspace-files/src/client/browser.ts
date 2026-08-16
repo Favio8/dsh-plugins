@@ -10,7 +10,7 @@ import { listDir, type ListEntry } from './bridge'
 import { t } from './locales'
 import { ignoredNames } from './mention'
 import { basenameOf, fileIcon, joinAbs, relOf } from './paths'
-import { addRecent, browserStore, closeBrowser, openPreview, prefsStore, setPrefs, useStore } from './store'
+import { addRecent, browserStore, closeBrowser, openPreview, prefsStore, previewStore, setPrefs, useStore } from './store'
 import type { SessionsFace, WorkspacesFace } from './types'
 
 let sessionsSvc: SessionsFace | undefined
@@ -71,7 +71,7 @@ export function FolderBrowser(): React.ReactElement | null {
       lastSession.current = cur
       const cwd = snap?.byId[cur]?.cwd
       if (cwd !== undefined && cwd !== '') {
-        browserStore.set({ root: cwd, currentPath: cwd, expanded: {}, rev: browserStore.get().rev + 1 })
+        browserStore.set({ root: cwd, currentPath: cwd, rev: browserStore.get().rev + 1 })
       }
     }
     sync()
@@ -83,6 +83,8 @@ export function FolderBrowser(): React.ReactElement | null {
     if (!state.open) return
     const onKey = (ev: KeyboardEvent): void => {
       if (ev.key === 'Escape') {
+        // 预览抽屉盖在浏览抽屉上时，ESC 只关闭最上层。
+        if (previewStore.get().open) return
         ev.stopPropagation()
         closeBrowser()
       }

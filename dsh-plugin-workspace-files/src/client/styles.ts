@@ -147,6 +147,8 @@ const CSS = `
 }
 .wf-code-line {
   display: flex;
+  content-visibility: auto;
+  contain-intrinsic-size: 20px;
 }
 .wf-line-no {
   flex: none;
@@ -468,13 +470,17 @@ const CSS = `
 }
 `
 
-/** 注入插件样式（幂等；每次检查 DOM，插件停止后再次启用也能恢复样式）。 */
-export function injectStyles(): void {
-  if (typeof document === 'undefined') return
-  if (document.querySelector('style[data-plugin-css="dsh-plugin-workspace-files"]') !== null) return
+/** 注入插件样式（幂等）；返回清理函数，由 apply 挂到 ctx.effect。 */
+export function injectStyles(): () => void {
+  if (typeof document === 'undefined') return () => {}
+  const selector = 'style[data-plugin-css="dsh-plugin-workspace-files"]'
+  if (document.querySelector(selector) !== null) {
+    return () => document.querySelector(selector)?.remove()
+  }
   const tag = document.createElement('style')
   tag.dataset.plugin = 'dsh-plugin-workspace-files'
   tag.dataset.pluginCss = 'dsh-plugin-workspace-files'
   tag.textContent = CSS
   document.head.appendChild(tag)
+  return () => tag.remove()
 }

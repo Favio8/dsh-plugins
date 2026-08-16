@@ -93,8 +93,10 @@ export function readFile(
   )
 }
 
-export function getHostConfig(signal?: AbortSignal): Promise<HostConfig | null> {
-  return getJson<HostConfig>(`/workspace-files/config`, signal)
+export async function getHostConfig(signal?: AbortSignal): Promise<HostConfig | null> {
+  const result = await getJson<HostConfig & { ok?: boolean }>(`/workspace-files/config`, signal)
+  if (result === null || (typeof result === 'object' && result.ok === false)) return null
+  return result
 }
 
 export async function patchHostConfig(patch: Partial<HostConfig>): Promise<HostConfig | null> {
@@ -104,7 +106,10 @@ export async function patchHostConfig(patch: Partial<HostConfig>): Promise<HostC
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(patch),
     })
-    return (await res.json()) as HostConfig
+    if (!res.ok) return null
+    const body = (await res.json()) as HostConfig & { ok?: boolean; error?: string }
+    if (body.ok === false) return null
+    return body
   } catch {
     return null
   }

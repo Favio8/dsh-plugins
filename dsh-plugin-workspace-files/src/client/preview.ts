@@ -91,9 +91,12 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
+const TOKEN_RE = new RegExp(TOKEN_SRC, 'g')
+
 function highlightLine(line: string): React.ReactNode[] {
   const escaped = escapeHtml(line)
-  const re = new RegExp(TOKEN_SRC, 'g')
+  const re = TOKEN_RE
+  re.lastIndex = 0
   const nodes: React.ReactNode[] = []
   let last = 0
   let i = 0
@@ -143,6 +146,14 @@ export function PreviewDrawer(): React.ReactElement | null {
     void readFile(state.root, state.relPath, 0, LOAD_CHUNK, controller.signal)
       .then((r) => {
         if (r.ok) {
+          if (r.error !== undefined && r.error !== '') {
+            setLoad({
+              status: 'error',
+              error: r.error === '图片超过预览大小上限' ? t('preview.imageTooLarge') : r.error,
+              loadedBytes: 0,
+            })
+            return
+          }
           setLoad({
             status: 'done',
             content: r.content,
@@ -237,7 +248,7 @@ export function PreviewDrawer(): React.ReactElement | null {
       {
         className: 'wf-drawer wf-preview-drawer',
         role: 'dialog',
-        'aria-label': t('preview.close'),
+        'aria-label': `${t('preview.close')}: ${basenameOf(rel)}`,
         onClick: (e: React.MouseEvent) => e.stopPropagation(),
       },
       // 头部
@@ -293,9 +304,13 @@ export function PreviewDrawer(): React.ReactElement | null {
             type: 'button',
             className: 'wf-btn',
             onClick: () => {
-              void navigator.clipboard?.writeText(rel).then(() => {
+              const clipboard = navigator.clipboard
+              if (clipboard === undefined) return
+              void clipboard.writeText(rel).then(() => {
                 setCopied(true)
                 window.setTimeout(() => setCopied(false), 1200)
+              }).catch(() => {
+                // 剪贴板权限被拒绝时静默
               })
             },
           },

@@ -1,12 +1,12 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { open, readdir, realpath, stat } from 'node:fs/promises'
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { lstat, open, readdir, realpath, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
 import { extname, join, resolve, sep } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 
 export const name = 'workspace-files'
-export const inject = ['webServer']
+export const inject = ['webServer', 'sessions']
 
 /**
  * dsh-plugin-workspace-files — Host 半：工作区文件 HTTP 桥。
@@ -70,7 +70,14 @@ function loadConfig(): HostConfig {
       allowOutsideCwd: typeof raw.allowOutsideCwd === 'boolean' ? raw.allowOutsideCwd : DEFAULTS.allowOutsideCwd,
     }
   } catch {
-    return { ...DEFAULTS }
+    // 配置损坏时回退默认值，并尝试原子重建，避免每次请求都重复解析失败。
+    const fallback = { ...DEFAULTS }
+    try {
+      saveConfig(fallback)
+    } catch {
+      // 重建失败仍以默认值运行
+    }
+    return fallback
   }
 }
 
@@ -82,33 +89,90 @@ function pickInt(value: unknown, fallback: number, min: number, max: number): nu
 let config = loadConfig()
 
 function saveConfig(next: HostConfig): void {
+  const tempPath = `${CONFIG_PATH}.tmp`
   try {
     mkdirSync(CONFIG_DIR, { recursive: true })
-    writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2), 'utf8')
+    writeFileSync(tempPath, JSON.stringify(next, null, 2), 'utf8')
+    renameSync(tempPath, CONFIG_PATH)
   } catch (error) {
+    try {
+      unlinkSync(tempPath)
+    } catch {
+      // 临时文件可能不存在，忽略
+    }
     console.error('[workspace-files] 保存配置失败:', error)
   }
 }
 
+interface HostSessionLike {
+  header?: {
+    cwd?: string
+  }
+}
+
+interface SessionStoreLike {
+  list(): HostSessionLike[]
+}
+
+let liveSessions: SessionStoreLike | undefined
+
 /** 路径守卫结果：ok 时 abs 为解析后的绝对路径（可能不存在，由调用方 stat 判定）。 */
 type GuardResult = { ok: true; abs: string } | { ok: false; status: number; error: string }
 
+/** Windows 文件系统大小写不敏感，路径比较前统一归一化。 */
+function comparePath(path: string): string {
+  return process.platform === 'win32' ? path.toLowerCase() : path
+}
+
+/** candidate 是否位于 parent 内（或与 parent 相同）；盘符根也正确。 */
+function isWithin(parent: string, candidate: string): boolean {
+  const p = comparePath(parent)
+  const c = comparePath(candidate)
+  if (c === p) return true
+  const prefix = p.endsWith(sep) ? p : p + sep
+  return c.startsWith(prefix)
+}
+
+/** 取真实路径；目标不存在时回退为词法绝对路径（调用方会按 404 处理）。 */
+async function canonicalPath(path: string): Promise<string> {
+  try {
+    return await realpath(path)
+  } catch {
+    return resolve(path)
+  }
+}
+
+/**
+ * root 不允许客户端任意指定：必须是当前 host sessions 中某个会话的 cwd。
+ * 这补上了旧实现“root 即边界”的漏洞——否则请求方传 root=D:\secret 即可读任意目录。
+ */
+async function isRegisteredRoot(root: string): Promise<boolean> {
+  const canonicalRoot = comparePath(await canonicalPath(root))
+  for (const session of liveSessions?.list() ?? []) {
+    const cwd = session.header?.cwd
+    if (typeof cwd !== 'string' || cwd === '') continue
+    if (comparePath(await canonicalPath(cwd)) === canonicalRoot) return true
+  }
+  return false
+}
+
 /**
  * 校验目标路径位于边界内。
- * 边界：默认 = root 本身；allowOutsideCwd=true 时 = root 本身 + 宿主主目录。
- * 这样即使工作区不在主目录下（如 D:\code\project），开启“允许浏览工作区之外”
- * 也不会把原本工作区内的合法访问误杀。
- * realpath 复核：目标存在时解析符号链接，链接指向边界外一律拒绝。
+ * 边界：root 必须是已注册会话 cwd；allowOutsideCwd=true 时额外允许宿主主目录。
+ * root 与目标都先 canonicalPath：支持 cwd 本身是符号链接/大小写差异，
+ * 且符号链接逃逸会因 realpath 落在边界外而被拒绝。
  */
 async function guardPath(root: string, target: string): Promise<GuardResult> {
-  const absRoot = resolve(root)
+  if (!(await isRegisteredRoot(root))) {
+    return { ok: false, status: 403, error: 'root 不是当前已注册会话的工作目录' }
+  }
+  const absRoot = await canonicalPath(root)
   const abs = resolve(absRoot, target)
-  const home = resolve(homedir())
+  const home = await canonicalPath(resolve(homedir()))
 
-  const withinRoot = (candidate: string): boolean =>
-    candidate === absRoot || candidate.startsWith(absRoot + sep)
+  const withinRoot = (candidate: string): boolean => isWithin(absRoot, candidate)
   const withinHome = (candidate: string): boolean =>
-    config.allowOutsideCwd && (candidate === home || candidate.startsWith(home + sep))
+    config.allowOutsideCwd && isWithin(home, candidate)
 
   if (!withinRoot(abs) && !withinHome(abs)) {
     return { ok: false, status: 403, error: '越权：路径超出允许范围' }
@@ -118,10 +182,11 @@ async function guardPath(root: string, target: string): Promise<GuardResult> {
     if (!withinRoot(real) && !withinHome(real)) {
       return { ok: false, status: 403, error: '越权：符号链接指向允许范围之外' }
     }
+    return { ok: true, abs: real }
   } catch {
     // 目标不存在：由调用方按 404/400 处理
+    return { ok: true, abs }
   }
-  return { ok: true, abs }
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -129,28 +194,37 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body))
 }
 
-function readJsonBody(req: IncomingMessage): Promise<unknown> {
+type JsonBodyResult =
+  | { ok: true; value: unknown }
+  | { ok: false; status: number; error: string }
+
+function readJsonBody(req: IncomingMessage): Promise<JsonBodyResult> {
   return new Promise((resolveBody) => {
     let data = ''
-    let tooLarge = false
+    let settled = false
     req.on('data', (chunk: Buffer) => {
-      if (tooLarge) return
+      if (settled) return
       data += chunk.toString('utf8')
       if (Buffer.byteLength(data, 'utf8') > MAX_JSON_BODY_BYTES) {
-        tooLarge = true
-        resolveBody(null)
-        req.destroy()
+        settled = true
+        req.pause()
+        resolveBody({ ok: false, status: 413, error: '请求体过大' })
       }
     })
     req.on('end', () => {
-      if (tooLarge) return
+      if (settled) return
+      settled = true
       try {
-        resolveBody(JSON.parse(data))
+        resolveBody({ ok: true, value: JSON.parse(data) })
       } catch {
-        resolveBody(null)
+        resolveBody({ ok: false, status: 400, error: '请求体不是合法 JSON' })
       }
     })
-    req.on('error', () => resolveBody(null))
+    req.on('error', () => {
+      if (settled) return
+      settled = true
+      resolveBody({ ok: false, status: 400, error: '请求体读取失败' })
+    })
   })
 }
 
@@ -164,6 +238,32 @@ interface ListEntry {
   kind: 'file' | 'dir'
   size?: number
   mtime?: number
+}
+
+const IMAGE_MIME: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.svg': 'image/svg+xml',
+}
+
+/**
+ * 多字节 UTF-8 字符可能跨 offset/limit 边界：若 chunk 末尾截断了字符，
+ * 把 bytesRead 回退到该字符起点，下一段从合法边界续读。
+ */
+function completeUtf8Prefix(chunk: Buffer, hasMore: boolean): number {
+  if (!hasMore || chunk.length === 0) return chunk.length
+  let end = chunk.length - 1
+  if ((chunk[end] & 0x80) === 0) return chunk.length
+  let start = end
+  while (start > 0 && (chunk[start] & 0xc0) === 0x80) start--
+  const lead = chunk[start]
+  const expected =
+    lead < 0x80 ? 1 : lead < 0xe0 ? 2 : lead < 0xf0 ? 3 : 4
+  return end - start + 1 < expected ? start : chunk.length
 }
 
 async function handleList(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -195,7 +295,7 @@ async function handleList(req: IncomingMessage, res: ServerResponse): Promise<vo
       visible.map(async (d): Promise<ListEntry> => {
         const full = join(guarded.abs, d.name)
         try {
-          const s = await stat(full)
+          const s = await lstat(full)
           return {
             name: d.name,
             path: full,
@@ -266,7 +366,7 @@ async function handleRead(req: IncomingMessage, res: ServerResponse): Promise<vo
       const handle = await open(guarded.abs, 'r')
       try {
         const buf = await handle.readFile()
-        const mime = ext === '.svg' ? 'image/svg+xml' : `image/${ext.slice(1)}`
+        const mime = IMAGE_MIME[ext] ?? `image/${ext.slice(1)}`
         sendJson(res, 200, {
           ok: true,
           path: guarded.abs,
@@ -303,9 +403,12 @@ async function handleRead(req: IncomingMessage, res: ServerResponse): Promise<vo
   try {
     const handle = await open(guarded.abs, 'r')
     try {
-      const buf = Buffer.alloc(limit)
-      const { bytesRead } = await handle.read(buf, 0, limit, offset)
-      const chunk = buf.subarray(0, bytesRead)
+      // 多读最多 3 字节，保证跨 chunk 的 UTF-8 字符能在本段完整收尾。
+      const readLimit = Math.min(limit + 3, size - offset)
+      const buf = Buffer.alloc(readLimit)
+      const read = await handle.read(buf, 0, readLimit, offset)
+      const safeBytes = completeUtf8Prefix(buf.subarray(0, read.bytesRead), offset + read.bytesRead < size)
+      const chunk = buf.subarray(0, safeBytes)
       // 二进制嗅探：前 4KB 含 NUL 视为二进制
       if (chunk.subarray(0, 4096).includes(0)) {
         sendJson(res, 200, { ok: true, path: guarded.abs, size, binary: true })
@@ -316,8 +419,8 @@ async function handleRead(req: IncomingMessage, res: ServerResponse): Promise<vo
         path: guarded.abs,
         size,
         content: chunk.toString('utf8'),
-        bytesRead,
-        truncated: offset + bytesRead < size,
+        bytesRead: safeBytes,
+        truncated: offset + safeBytes < size,
         encoding: 'utf8',
       })
     } finally {
@@ -334,7 +437,12 @@ function handleConfig(req: IncomingMessage, res: ServerResponse): void {
     return
   }
   if (req.method === 'POST') {
-    void readJsonBody(req).then((body) => {
+    void readJsonBody(req).then((result) => {
+      if (!result.ok) {
+        sendJson(res, result.status, { ok: false, error: result.error })
+        return
+      }
+      const body = result.value
       const patch = (typeof body === 'object' && body !== null ? body : {}) as Partial<HostConfig>
       const keys = Object.keys(patch) as (keyof HostConfig)[]
       if (keys.length === 0) {
@@ -347,8 +455,20 @@ function handleConfig(req: IncomingMessage, res: ServerResponse): void {
         allowOutsideCwd: true,
       }
       for (const key of keys) {
-        if (!known[key]) {
+        if (!Object.hasOwn(known, key)) {
           sendJson(res, 400, { ok: false, error: `未知配置项: ${key}` })
+          return
+        }
+        const value = patch[key]
+        if (
+          (key === 'allowOutsideCwd' && typeof value !== 'boolean') ||
+          (key !== 'allowOutsideCwd' && (typeof value !== 'number' || !Number.isInteger(value))) ||
+          (key === 'maxPreviewBytes' && (value as number) < 64 * 1024) ||
+          (key === 'maxPreviewBytes' && (value as number) > 8 * 1024 * 1024) ||
+          (key === 'imageMaxBytes' && (value as number) < 64 * 1024) ||
+          (key === 'imageMaxBytes' && (value as number) > 16 * 1024 * 1024)
+        ) {
+          sendJson(res, 400, { ok: false, error: `非法值: ${key}` })
           return
         }
       }
@@ -378,6 +498,7 @@ export function apply(ctx: Context): void {
   const webServer = ctx.get('webServer') as
     | { register(route: { kind: 'exact'; path: string; handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void> }): () => void }
     | undefined
+  liveSessions = ctx.get('sessions') as SessionStoreLike | undefined
   if (webServer === undefined) return
 
   ctx.effect(() =>

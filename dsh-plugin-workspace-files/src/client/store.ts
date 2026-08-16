@@ -75,8 +75,6 @@ export interface BrowserState {
   open: boolean
   root: string
   currentPath: string
-  /** 已展开的目录（绝对路径 → 布尔）。 */
-  expanded: Record<string, boolean>
   /** 刷新计数：变更时重新拉取当前层。 */
   rev: number
 }
@@ -85,12 +83,11 @@ export const browserStore = createStore<BrowserState>({
   open: false,
   root: '',
   currentPath: '',
-  expanded: {},
   rev: 0,
 })
 
 export function openBrowser(root: string): void {
-  browserStore.set({ open: true, root, currentPath: root, expanded: {}, rev: browserStore.get().rev + 1 })
+  browserStore.set({ open: true, root, currentPath: root, rev: browserStore.get().rev + 1 })
 }
 
 export function closeBrowser(): void {
@@ -157,8 +154,16 @@ const RECENTS_KEY = 'dsh-workspace-files:recents'
 
 function loadRecents(): RecentEntry[] {
   try {
-    const raw = JSON.parse(localStorage.getItem(RECENTS_KEY) ?? '[]') as RecentEntry[]
-    return Array.isArray(raw) ? raw : []
+    const raw = JSON.parse(localStorage.getItem(RECENTS_KEY) ?? '[]') as unknown
+    if (!Array.isArray(raw)) return []
+    return raw
+      .filter((e): e is RecentEntry =>
+        typeof e === 'object' && e !== null &&
+        typeof (e as RecentEntry).sessionId === 'string' &&
+        typeof (e as RecentEntry).root === 'string' &&
+        typeof (e as RecentEntry).relPath === 'string' &&
+        typeof (e as RecentEntry).at === 'number')
+      .slice(0, 50)
   } catch {
     return []
   }
@@ -181,6 +186,16 @@ export function getRecents(sessionId: string, root: string): string[] {
     .map((e) => e.relPath)
 }
 
+const recentsListeners = new Set<() => void>()
+
+/** 最近引用变化订阅（用于 input-trigger 的 lexicon 失效通知）。 */
+export function subscribeRecents(fn: () => void): () => void {
+  recentsListeners.add(fn)
+  return () => {
+    recentsListeners.delete(fn)
+  }
+}
+
 /** 记录一次引用（@ 选中或预览打开）。 */
 export function addRecent(sessionId: string, root: string, relPath: string): void {
   const entries = loadRecents().filter(
@@ -188,4 +203,5 @@ export function addRecent(sessionId: string, root: string, relPath: string): voi
   )
   entries.unshift({ sessionId, root, relPath, at: Date.now() })
   saveRecents(entries)
+  for (const fn of [...recentsListeners]) fn()
 }

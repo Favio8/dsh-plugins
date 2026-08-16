@@ -53,8 +53,8 @@ export function isPathTitle(value: string): boolean {
   if (t === '') return false
   if (/^[A-Za-z]:[\\/]/.test(t) || t.startsWith('/') || t.startsWith('\\')) return true
   return (
-    /^[\w.@+~-]+(?:\.[A-Za-z0-9]+)$/.test(t) ||
-    /^[\w.@+~-]+(?:[\\/][\w.@+~-]+)+$/.test(t)
+    /^[\w.@+~ -]+(?:\.[A-Za-z0-9]+)$/.test(t) ||
+    /^[\w.@+~ -]+(?:[\\/][\w.@+~ -]+)+$/.test(t)
   )
 }
 

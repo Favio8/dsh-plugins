@@ -29,7 +29,7 @@ export function apply(ctx: {
   get(name: string): unknown
   effect(fn: () => unknown, label?: string): void
 }): void {
-  injectStyles()
+  ctx.effect(() => injectStyles(), 'workspace-files: styles')
 
   const slots = ctx.get('slots') as SlotsFace | undefined
   const sessions = ctx.get('sessions') as SessionsFace | undefined

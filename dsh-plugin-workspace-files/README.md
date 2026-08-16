@@ -40,6 +40,7 @@ powershell -ExecutionPolicy Bypass -File ..\relaunch-web.ps1
 | 忽略规则 | localStorage | 逗号分隔；与内置 `node_modules,.git,dist,build,out,.next` 合并 |
 | 最近引用条数 | localStorage | `@` 菜单置顶数量（1–10） |
 | 预览大小上限 | Host `~/.dsh/plugins/workspace-files.json` | 文本单次读取上限（服务端强制，64KB–8MB） |
+| 图片预览上限 | Host 同上 | 图片超过该大小不返回 dataURL（服务端强制，64KB–16MB） |
 | 允许浏览工作区之外 | Host 同上 | 默认关；开启后读取边界放宽到主目录（工作区根目录始终可用） |
 
 ## 架构与安全
@@ -48,7 +49,7 @@ powershell -ExecutionPolicy Bypass -File ..\relaunch-web.ps1
   - `GET /workspace-files/list?root=&path=&hidden=` 列一层（文件+目录，200 上限）
   - `GET /workspace-files/read?root=&path=&offset=&limit=` 读片段 / 图片 dataURL / 二进制判定
   - `GET|POST /workspace-files/config` 安全配置持久化
-  - **root guard**：路径 `resolve` 后必须位于边界内（默认 = 会话 cwd；`allowOutsideCwd` 开启后为主目录），`realpath` 复核防符号链接逃逸
+  - **root guard**：`root` 必须是当前 Host 已注册会话的 cwd（客户端不能自选根目录）；路径 `resolve` + `realpath` 后必须位于边界内（`allowOutsideCwd` 开启后额外允许主目录），大小写/符号链接 cwd 均已归一化，符号链接逃逸拒绝
 - **Client 半**（`src/client.ts`）：`@` source（`mention.ts`）、预览抽屉 + 点击拦截（`preview.ts`）、文件夹浏览（`browser.ts`）、头部按钮（`header.ts`）、设置页（`settings.ts`）；模块级 store（`store.ts`）只存叶子值，不持有 live 数据；所有副作用挂 `ctx.effect`。
 - 依赖注入：`inject: ['slots','sessions','inputTriggers','locale']`；`workspaces` 可选（无则隐藏「在系统中打开」）。
 
@@ -63,6 +64,7 @@ powershell -ExecutionPolicy Bypass -File ..\relaunch-web.ps1
 ```bash
 pnpm run typecheck   # tsc --noEmit
 pnpm run build       # tsdown 双入口：lib/index.mjs (Host) + lib/client.js (Client loader 外壳)
+pnpm run smoke       # node scripts/smoke-client.mjs：模拟加载器验证 client bundle
 ```
 
 提交规范遵循仓库 [AGENTS.md](../AGENTS.md) §7（`emoji 类型: 英文描述`）。

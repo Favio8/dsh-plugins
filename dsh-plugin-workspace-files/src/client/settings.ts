@@ -16,16 +16,28 @@ const MAX_PREVIEW_OPTIONS = [
   { value: 5 * 1024 * 1024, label: '5 MB' },
 ]
 
+const IMAGE_MAX_OPTIONS = [
+  { value: 512 * 1024, label: '512 KB' },
+  { value: 1024 * 1024, label: '1 MB' },
+  { value: 2 * 1024 * 1024, label: '2 MB' },
+  { value: 5 * 1024 * 1024, label: '5 MB' },
+  { value: 10 * 1024 * 1024, label: '10 MB' },
+]
+
 const RECENT_OPTIONS = [1, 3, 5, 8, 10]
 
 export function SettingsSection(): React.ReactElement {
   const prefs = useStore(prefsStore)
   const [host, setHost] = React.useState<HostConfig | null>(null)
+  const latestSeq = React.useRef(0)
+  const lastGood = React.useRef<HostConfig | null>(null)
 
   React.useEffect(() => {
     let cancelled = false
     void getHostConfig().then((h) => {
-      if (!cancelled && h !== null) setHost(h)
+      if (cancelled || h === null) return
+      lastGood.current = h
+      setHost(h)
     })
     return () => {
       cancelled = true
@@ -33,9 +45,20 @@ export function SettingsSection(): React.ReactElement {
   }, [])
 
   const patchHost = (p: Partial<HostConfig>): void => {
-    setHost((prev) => (prev === null ? prev : { ...prev, ...p }))
+    setHost((prev) => {
+      if (prev === null) return prev
+      lastGood.current = prev
+      return { ...prev, ...p }
+    })
+    const seq = ++latestSeq.current
     void patchHostConfig(p).then((h) => {
-      if (h !== null) setHost(h)
+      if (seq !== latestSeq.current) return
+      if (h === null) {
+        setHost(lastGood.current)
+      } else {
+        lastGood.current = h
+        setHost(h)
+      }
     })
   }
 
@@ -105,6 +128,20 @@ export function SettingsSection(): React.ReactElement {
             onChange: (e: React.ChangeEvent<HTMLSelectElement>) => patchHost({ maxPreviewBytes: Number(e.target.value) }),
           },
           MAX_PREVIEW_OPTIONS.map((o) => React.createElement('option', { key: o.value, value: o.value }, o.label)),
+        ),
+      ),
+      field(
+        t('settings.imageMax'),
+        t('settings.imageMaxSub'),
+        React.createElement(
+          'select',
+          {
+            className: 'wf-select',
+            value: host?.imageMaxBytes ?? 2 * 1024 * 1024,
+            disabled: host === null,
+            onChange: (e: React.ChangeEvent<HTMLSelectElement>) => patchHost({ imageMaxBytes: Number(e.target.value) }),
+          },
+          IMAGE_MAX_OPTIONS.map((o) => React.createElement('option', { key: o.value, value: o.value }, o.label)),
         ),
       ),
       field(
