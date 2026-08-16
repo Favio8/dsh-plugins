@@ -4965,6 +4965,94 @@ function formatBytes(size) {
 	return `${(size / 1048576).toFixed(1)} MB`;
 }
 //#endregion
+//#region src/client/chip-tooltip.ts
+/**
+* @file chip 悬浮提示：官方 backdrop 是 pointer-events:none，chip 的 title
+* 永远不会被浏览器原生 tooltip 触发。这里用坐标命中检测 + 自绘 tooltip，
+* 不拦截鼠标事件，不影响 textarea 的光标/点击行为。
+*/
+const CHIP_SEL = "span[data-decoration=\"chip\"][title^=\"@\"]";
+/** 命中当前鼠标位置下的 @file chip，返回标题文本；未命中返回 null。 */
+function hitChip(x, y) {
+	for (const el of document.querySelectorAll(CHIP_SEL)) {
+		const r = el.getBoundingClientRect();
+		if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+			const title = el.getAttribute("title");
+			if (title !== null && title !== "") return title;
+			return el.textContent ?? "";
+		}
+	}
+	return null;
+}
+function showTip(el, x, y, text) {
+	el.textContent = text;
+	el.style.visibility = "hidden";
+	el.style.left = "0px";
+	el.style.top = "0px";
+	document.body.appendChild(el);
+	const rect = el.getBoundingClientRect();
+	const pad = 8;
+	const left = Math.max(pad, Math.min(x - rect.width / 2, window.innerWidth - rect.width - pad));
+	let top = y - rect.height - 8;
+	if (top < pad) top = y + 12;
+	el.style.left = `${Math.round(left)}px`;
+	el.style.top = `${Math.round(top)}px`;
+	el.style.visibility = "visible";
+}
+function hideTip(el) {
+	if (el === null) return;
+	el.style.visibility = "hidden";
+	el.remove();
+}
+/** 安装 chip 悬浮提示；返回 disposer。 */
+function installChipTooltip() {
+	if (typeof document === "undefined") return () => {};
+	let tip = null;
+	let raf = 0;
+	let lastX = NaN;
+	let lastY = NaN;
+	const ensureTip = () => {
+		if (tip !== null) return tip;
+		tip = document.createElement("div");
+		tip.className = "wf-chip-tip";
+		tip.setAttribute("aria-hidden", "true");
+		return tip;
+	};
+	const scan = () => {
+		raf = 0;
+		const title = hitChip(lastX, lastY);
+		if (title === null) {
+			hideTip(tip);
+			tip = null;
+			return;
+		}
+		showTip(ensureTip(), lastX, lastY, title);
+	};
+	const onMove = (event) => {
+		lastX = event.clientX;
+		lastY = event.clientY;
+		if (raf !== 0) return;
+		raf = requestAnimationFrame(scan);
+	};
+	const onOut = (event) => {
+		if (event.relatedTarget === null || event.relatedTarget instanceof Node && !document.body.contains(event.relatedTarget)) {
+			if (raf !== 0) cancelAnimationFrame(raf);
+			raf = 0;
+			hideTip(tip);
+			tip = null;
+		}
+	};
+	document.addEventListener("mousemove", onMove, true);
+	document.addEventListener("mouseout", onOut, true);
+	return () => {
+		document.removeEventListener("mousemove", onMove, true);
+		document.removeEventListener("mouseout", onOut, true);
+		if (raf !== 0) cancelAnimationFrame(raf);
+		hideTip(tip);
+		tip = null;
+	};
+}
+//#endregion
 //#region src/client/settings.ts
 /**
 * 设置页（settings.section「工作区文件」）。
@@ -5403,6 +5491,25 @@ span[data-decoration="chip"][title^="@"][data-invalid] > span {
   box-shadow: inset 0 0 0 1px rgba(216, 97, 97, 0.32);
 }
 
+/* ── @file chip 悬浮提示（JS 坐标命中检测 + 自绘 tooltip） ── */
+.wf-chip-tip {
+  position: fixed;
+  z-index: 1200;
+  max-width: min(320px, calc(100vw - 16px));
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-overlay);
+  border: 1px solid var(--dsw-alias-border-l1);
+  box-shadow: var(--dsw-shadow-lv3);
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
 /* ── 文件夹浏览抽屉 ─────────────────────────────────────── */
 .wf-breadcrumb {
   display: flex;
@@ -5665,6 +5772,7 @@ function apply(ctx) {
 	}
 	if (inputTriggers !== void 0 && sessions !== void 0) ctx.effect(() => createFileSource(sessions, inputTriggers), "workspace-files: @ source");
 	ctx.effect(() => installClickInterceptor(), "workspace-files: click interceptor");
+	ctx.effect(() => installChipTooltip(), "workspace-files: @file chip tooltip");
 	if (slots === void 0) return;
 	ctx.effect(() => slots.inject("shell.overlay", () => slots.register({
 		name: "shell.overlay",

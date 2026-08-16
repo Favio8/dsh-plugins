@@ -290,6 +290,25 @@ span[data-decoration="chip"][title^="@"][data-invalid] > span {
   box-shadow: inset 0 0 0 1px rgba(216, 97, 97, 0.32);
 }
 
+/* ── @file chip 悬浮提示（JS 坐标命中检测 + 自绘 tooltip） ── */
+.wf-chip-tip {
+  position: fixed;
+  z-index: 1200;
+  max-width: min(320px, calc(100vw - 16px));
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-overlay);
+  border: 1px solid var(--dsw-alias-border-l1);
+  box-shadow: var(--dsw-shadow-lv3);
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
 /* ── 文件夹浏览抽屉 ─────────────────────────────────────── */
 .wf-breadcrumb {
   display: flex;

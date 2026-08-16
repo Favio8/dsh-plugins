@@ -13,6 +13,7 @@ import { bindBrowserServices, FolderBrowser } from './client/browser'
 import { bindHeaderServices, HeaderFolderButton } from './client/header'
 import { createFileSource } from './client/mention'
 import { bindPreviewServices, installClickInterceptor, PreviewDrawer } from './client/preview'
+import { installChipTooltip } from './client/chip-tooltip'
 import { SettingsSection } from './client/settings'
 import { injectStyles } from './client/styles'
 import type {
@@ -52,6 +53,7 @@ export function apply(ctx: {
   }
 
   ctx.effect(() => installClickInterceptor(), 'workspace-files: click interceptor')
+  ctx.effect(() => installChipTooltip(), 'workspace-files: @file chip tooltip')
 
   if (slots === undefined) return
 

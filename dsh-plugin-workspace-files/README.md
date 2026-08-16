@@ -50,7 +50,7 @@ powershell -ExecutionPolicy Bypass -File ..\relaunch-web.ps1
   - `GET /workspace-files/read?root=&path=&offset=&limit=` 读片段 / 图片 dataURL / 二进制判定
   - `GET|POST /workspace-files/config` 安全配置持久化
   - **root guard**：`root` 必须是当前 Host 已注册会话的 cwd（客户端不能自选根目录）；路径 `resolve` + `realpath` 后必须位于边界内（`allowOutsideCwd` 开启后额外允许主目录），大小写/符号链接 cwd 均已归一化，符号链接逃逸拒绝
-- **Client 半**（`src/client.ts`）：`@` source（`mention.ts`，insert-type 文件 chip + `codec` 序列化为 `@<path>`）、预览抽屉 + 点击拦截（`preview.ts`）、文件夹浏览（`browser.ts`）、头部按钮（`header.ts`）、设置页（`settings.ts`）；模块级 store（`store.ts`）只存叶子值，不持有 live 数据；所有副作用挂 `ctx.effect`。
+- **Client 半**（`src/client.ts`）：`@` source（`mention.ts`，insert-type 文件 chip + `codec` 序列化为 `@<path>`）、chip 悬浮提示（`chip-tooltip.ts`）、预览抽屉 + 点击拦截（`preview.ts`）、文件夹浏览（`browser.ts`）、头部按钮（`header.ts`）、设置页（`settings.ts`）；模块级 store（`store.ts`）只存叶子值，不持有 live 数据；所有副作用挂 `ctx.effect`。
 - 依赖注入：`inject: ['slots','sessions','inputTriggers','locale']`；`workspaces` 可选（无则隐藏「在系统中打开」）。
 
 ## 升级回归点（官方变更时检查）
