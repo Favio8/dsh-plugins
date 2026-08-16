@@ -4,7 +4,8 @@
  * 机制（纯 DOM，零 shadow 官方渲染）：
  * - 对话滚动容器带官方稳定属性 `data-conversation-scroll`；
  * - 每条消息是 `div[data-chat-flow-kind="user"]`（用户消息）+ `data-chat-flow-key`（稳定 key）；
- * - MutationObserver 跟踪容器出现/消失与消息增删；滚动时 scroll-spy 高亮当前点；
+ * - MutationObserver 跟踪容器出现/消失、消息增删与文本流式更新；
+ * - 滚动时 scroll-spy 高亮当前点（用户消息顺序稳定，二分查找）；
  * - 点击圆点平滑滚动定位到该条用户消息；hover 显示消息预览。
  * UI 注册在 shell.overlay（自备 id，不占用官方槽位）。
  */
@@ -22,6 +23,8 @@ const MIN_DOTS = 2
 /** 圆点直径与间距（固定一簇的排版参数）。 */
 const DOT_SIZE = 7
 const DOT_GAP = 8
+/** 长会话时圆点簇的最大可视高度，超出内部滚动。 */
+const MAX_CLUSTER_H = 320
 
 interface Dot {
   key: string
@@ -33,7 +36,6 @@ export function apply(ctx: {
   get(name: string): unknown
   effect(fn: () => unknown, label?: string): void
 }): void {
-  injectStyles()
   const slots = ctx.get('slots') as
     | {
         inject(key: string, callback: () => unknown): () => void
@@ -44,6 +46,7 @@ export function apply(ctx: {
       }
     | undefined
   if (slots === undefined) return
+  ctx.effect(() => injectStyles(), 'chat-jump: styles')
   ctx.effect(
     () =>
       slots.inject('shell.overlay', () =>
@@ -66,6 +69,7 @@ export function ChatJumpRail(): React.ReactElement | null {
     let rootObserver: MutationObserver | null = null
     let raf = 0
     let scrollRaf = 0
+    let userEls: HTMLElement[] = []
 
     const collectDots = (): Dot[] => {
       if (container === null) return []
@@ -110,15 +114,22 @@ export function ChatJumpRail(): React.ReactElement | null {
       return Number.parseFloat(cs.paddingLeft) || 24
     }
 
+    /** 用户消息按文档流从上到下排列，二分即可，避免长会话每帧全量 getBoundingClientRect。 */
     const computeActive = (): void => {
       if (container === null) return
       const cTop = container.getBoundingClientRect().top + HEADROOM
       let current: string | null = null
-      for (const el of container.querySelectorAll<HTMLElement>(USER_SEL)) {
+      let lo = 0
+      let hi = userEls.length - 1
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1
+        const el = userEls[mid]
+        if (!el.isConnected) break
         if (el.getBoundingClientRect().top <= cTop) {
           current = el.getAttribute('data-chat-flow-key') ?? null
+          lo = mid + 1
         } else {
-          break
+          hi = mid - 1
         }
       }
       setActiveKey(current)
@@ -134,10 +145,16 @@ export function ChatJumpRail(): React.ReactElement | null {
       raf = requestAnimationFrame(() => {
         if (container === null) return
         const nextDots = collectDots()
+        userEls = nextDots.map((d) => d.el)
         setDots((prev) => {
           if (
             prev.length === nextDots.length &&
-            prev.every((d, i) => d.key === nextDots[i].key)
+            prev.every(
+              (d, i) =>
+                d.key === nextDots[i].key &&
+                d.el === nextDots[i].el &&
+                d.label === nextDots[i].label,
+            )
           ) {
             return prev
           }
@@ -153,7 +170,13 @@ export function ChatJumpRail(): React.ReactElement | null {
       container = c
       containerRef.current = c
       containerObserver = new MutationObserver(refresh)
-      containerObserver.observe(c, { childList: true, subtree: true })
+      containerObserver.observe(c, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: ['class', 'style', 'data-chat-flow-kind', 'data-chat-flow-key'],
+      })
       // 侧边栏收回/展开会改变容器尺寸与位置 → ResizeObserver 同步
       containerRO = new ResizeObserver(refresh)
       containerRO.observe(c)
@@ -168,18 +191,27 @@ export function ChatJumpRail(): React.ReactElement | null {
       containerRO?.disconnect()
       containerRO = null
       if (container !== null) container.removeEventListener('scroll', handleScroll)
+      cancelAnimationFrame(raf)
+      raf = 0
       cancelAnimationFrame(scrollRaf)
       scrollRaf = 0
       window.removeEventListener('resize', refresh)
       container = null
       containerRef.current = null
+      userEls = []
       setDots([])
       setRect(null)
       setActiveKey(null)
     }
 
     const find = (): void => {
-      const c = document.querySelector<HTMLElement>(SCROLL_SEL)
+      // 多个会话可能同时留在 DOM 中，优先取当前可见的滚动容器。
+      const candidates = Array.from(document.querySelectorAll<HTMLElement>(SCROLL_SEL))
+      const visible = candidates.find((el) => {
+        const r = el.getBoundingClientRect()
+        return r.width > 0 && r.height > 0
+      })
+      const c = visible ?? candidates[0] ?? null
       if (c !== null && c !== container) {
         detach()
         attach(c)
@@ -212,20 +244,21 @@ export function ChatJumpRail(): React.ReactElement | null {
 
   const jump = (dot: Dot): void => {
     const c = containerRef.current
-    if (c === null) return
+    if (c === null || !dot.el.isConnected) return
     const target =
       dot.el.getBoundingClientRect().top - c.getBoundingClientRect().top + c.scrollTop - HEADROOM
     c.scrollTo({ top: Math.max(0, target), behavior: 'smooth' })
   }
 
-  // 固定一簇：集中堆叠（最早在上），整体在消息区内垂直居中
+  // 固定一簇：集中堆叠（最早在上），整体在消息区内垂直居中；过长时簇内滚动。
   const clusterH = dots.length * DOT_SIZE + (dots.length - 1) * DOT_GAP
-  const clusterTop = rect.top + Math.max(0, (rect.height - clusterH) / 2)
+  const visibleH = Math.min(clusterH, MAX_CLUSTER_H)
+  const clusterTop = rect.top + Math.max(0, (rect.height - visibleH) / 2)
 
   return React.createElement(
     'div',
     {
-      className: 'cj-rail',
+      className: clusterH > MAX_CLUSTER_H ? 'cj-rail cj-rail-overflow' : 'cj-rail',
       style: { left: rect.left, top: clusterTop },
     },
     dots.map((dot) =>
@@ -251,6 +284,12 @@ const CSS = `
   width: 14px;
   z-index: 300;
   pointer-events: none;
+}
+.cj-rail-overflow {
+  pointer-events: auto;
+  overflow-y: auto;
+  max-height: 320px;
+  padding: 2px 1px;
 }
 .cj-dot {
   pointer-events: auto;
@@ -278,12 +317,16 @@ const CSS = `
 }
 `
 
-function injectStyles(): void {
-  if (typeof document === 'undefined') return
-  if (document.querySelector('style[data-plugin-css="dsh-plugin-chat-jump"]') !== null) return
+function injectStyles(): () => void {
+  if (typeof document === 'undefined') return () => {}
+  const selector = 'style[data-plugin-css="dsh-plugin-chat-jump"]'
+  if (document.querySelector(selector) !== null) {
+    return () => document.querySelector(selector)?.remove()
+  }
   const tag = document.createElement('style')
   tag.dataset.plugin = 'dsh-plugin-chat-jump'
   tag.dataset.pluginCss = 'dsh-plugin-chat-jump'
   tag.textContent = CSS
   document.head.appendChild(tag)
+  return () => tag.remove()
 }

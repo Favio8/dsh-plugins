@@ -4,7 +4,7 @@ DeepSeek Harness **对话快速跳转**插件：会话头「对话」tab 正下�
 
 ## 特性
 
-- **固定一簇圆点**：钉在会话头「对话」tab 正下方（水平左缘对齐 tab），一消息一点、最早在上；**不随滚动移动**，任何位置可见（≥2 条用户消息时显示，避免噪音）；整体在消息区内垂直居中；
+- **固定一簇圆点**：钉在会话头「对话」tab 正下方（水平左缘对齐 tab），一消息一点、最早在上；**不随滚动移动**，任何位置可见（≥2 条用户消息时显示，避免噪音）；整体在消息区内垂直居中；长会话超过 320px 时簇内滚动；
 - **侧边栏联动**：收起/展开左侧栏时圆点簇实时同步移位（ResizeObserver + 根 MutationObserver 属性观察）；
 - **点击直达**：平滑滚动把该条用户消息定位到视口上部（滚动偏移 120px）；
 - **scroll-spy**：滚动对话时自动高亮「当前」圆点（距视口顶部 120px 内判定）；
@@ -32,7 +32,7 @@ powershell -ExecutionPolicy Bypass -File ..\relaunch-web.ps1
 - **Host 半**（`src/index.ts`）：占位空插件（组合行需要，功能全在 Client）。
 - **Client 半**（`src/client.ts`）：`ChatJumpRail` 组件注册于 `shell.overlay`（id `chat-jump-rail`）；
   - 根级 MutationObserver（childList + attributes）跟踪 `[data-conversation-scroll]` 出现/消失与布局类名变化（切换会话自动重挂；侧边栏折叠刷新位置）；
-  - 容器级 MutationObserver 跟踪消息增删（新消息自动加点）；
+  - 容器级 MutationObserver 跟踪消息增删、文本流式更新与 key/class 属性变化（新消息自动加点，hover 预览文本实时刷新）；
   - 容器 ResizeObserver + 窗口 `resize` → rAF 节流刷新圆点与位置；
   - 水平定位：优先对齐会话头「对话」tab 左缘（`[role="tab"]` 文案 `对话`/`Conversation`），兜底取所有 flow 节点最左偏移（避开居中的 compaction 摘要条）；
   - 点击 → 手动计算 `scrollTo({ behavior: 'smooth' })`（不受页面其他滚动影响）。
@@ -50,6 +50,7 @@ powershell -ExecutionPolicy Bypass -File ..\relaunch-web.ps1
 ```bash
 pnpm run typecheck   # tsc --noEmit
 pnpm run build       # tsdown 双入口：lib/index.mjs (Host 占位) + lib/client.js (Client loader 外壳)
+pnpm run smoke       # node scripts/smoke-client.mjs：模拟加载器验证 client bundle
 ```
 
 提交规范遵循仓库 [AGENTS.md](../AGENTS.md) §7（`emoji 类型: 英文描述`）。

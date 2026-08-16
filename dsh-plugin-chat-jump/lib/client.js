@@ -35,7 +35,8 @@ react = __toESM(react, 1);
 * 机制（纯 DOM，零 shadow 官方渲染）：
 * - 对话滚动容器带官方稳定属性 `data-conversation-scroll`；
 * - 每条消息是 `div[data-chat-flow-kind="user"]`（用户消息）+ `data-chat-flow-key`（稳定 key）；
-* - MutationObserver 跟踪容器出现/消失与消息增删；滚动时 scroll-spy 高亮当前点；
+* - MutationObserver 跟踪容器出现/消失、消息增删与文本流式更新；
+* - 滚动时 scroll-spy 高亮当前点（用户消息顺序稳定，二分查找）；
 * - 点击圆点平滑滚动定位到该条用户消息；hover 显示消息预览。
 * UI 注册在 shell.overlay（自备 id，不占用官方槽位）。
 */
@@ -49,10 +50,12 @@ const MIN_DOTS = 2;
 /** 圆点直径与间距（固定一簇的排版参数）。 */
 const DOT_SIZE = 7;
 const DOT_GAP = 8;
+/** 长会话时圆点簇的最大可视高度，超出内部滚动。 */
+const MAX_CLUSTER_H = 320;
 function apply(ctx) {
-	injectStyles();
 	const slots = ctx.get("slots");
 	if (slots === void 0) return;
+	ctx.effect(() => injectStyles(), "chat-jump: styles");
 	ctx.effect(() => slots.inject("shell.overlay", () => slots.register({
 		name: "shell.overlay",
 		id: "chat-jump-rail",
@@ -71,6 +74,7 @@ function ChatJumpRail() {
 		let rootObserver = null;
 		let raf = 0;
 		let scrollRaf = 0;
+		let userEls = [];
 		const collectDots = () => {
 			if (container === null) return [];
 			return Array.from(container.querySelectorAll(USER_SEL)).map((el, i) => ({
@@ -109,12 +113,22 @@ function ChatJumpRail() {
 			const cs = getComputedStyle(container);
 			return Number.parseFloat(cs.paddingLeft) || 24;
 		};
+		/** 用户消息按文档流从上到下排列，二分即可，避免长会话每帧全量 getBoundingClientRect。 */
 		const computeActive = () => {
 			if (container === null) return;
 			const cTop = container.getBoundingClientRect().top + HEADROOM;
 			let current = null;
-			for (const el of container.querySelectorAll(USER_SEL)) if (el.getBoundingClientRect().top <= cTop) current = el.getAttribute("data-chat-flow-key") ?? null;
-			else break;
+			let lo = 0;
+			let hi = userEls.length - 1;
+			while (lo <= hi) {
+				const mid = lo + hi >> 1;
+				const el = userEls[mid];
+				if (!el.isConnected) break;
+				if (el.getBoundingClientRect().top <= cTop) {
+					current = el.getAttribute("data-chat-flow-key") ?? null;
+					lo = mid + 1;
+				} else hi = mid - 1;
+			}
 			setActiveKey(current);
 		};
 		const handleScroll = () => {
@@ -126,8 +140,9 @@ function ChatJumpRail() {
 			raf = requestAnimationFrame(() => {
 				if (container === null) return;
 				const nextDots = collectDots();
+				userEls = nextDots.map((d) => d.el);
 				setDots((prev) => {
-					if (prev.length === nextDots.length && prev.every((d, i) => d.key === nextDots[i].key)) return prev;
+					if (prev.length === nextDots.length && prev.every((d, i) => d.key === nextDots[i].key && d.el === nextDots[i].el && d.label === nextDots[i].label)) return prev;
 					return nextDots;
 				});
 				const r = container.getBoundingClientRect();
@@ -145,7 +160,15 @@ function ChatJumpRail() {
 			containerObserver = new MutationObserver(refresh);
 			containerObserver.observe(c, {
 				childList: true,
-				subtree: true
+				subtree: true,
+				characterData: true,
+				attributes: true,
+				attributeFilter: [
+					"class",
+					"style",
+					"data-chat-flow-kind",
+					"data-chat-flow-key"
+				]
 			});
 			containerRO = new ResizeObserver(refresh);
 			containerRO.observe(c);
@@ -159,17 +182,24 @@ function ChatJumpRail() {
 			containerRO?.disconnect();
 			containerRO = null;
 			if (container !== null) container.removeEventListener("scroll", handleScroll);
+			cancelAnimationFrame(raf);
+			raf = 0;
 			cancelAnimationFrame(scrollRaf);
 			scrollRaf = 0;
 			window.removeEventListener("resize", refresh);
 			container = null;
 			containerRef.current = null;
+			userEls = [];
 			setDots([]);
 			setRect(null);
 			setActiveKey(null);
 		};
 		const find = () => {
-			const c = document.querySelector(SCROLL_SEL);
+			const candidates = Array.from(document.querySelectorAll(SCROLL_SEL));
+			const c = candidates.find((el) => {
+				const r = el.getBoundingClientRect();
+				return r.width > 0 && r.height > 0;
+			}) ?? candidates[0] ?? null;
 			if (c !== null && c !== container) {
 				detach();
 				attach(c);
@@ -194,7 +224,7 @@ function ChatJumpRail() {
 	if (rect === null || dots.length < MIN_DOTS) return null;
 	const jump = (dot) => {
 		const c = containerRef.current;
-		if (c === null) return;
+		if (c === null || !dot.el.isConnected) return;
 		const target = dot.el.getBoundingClientRect().top - c.getBoundingClientRect().top + c.scrollTop - HEADROOM;
 		c.scrollTo({
 			top: Math.max(0, target),
@@ -202,9 +232,10 @@ function ChatJumpRail() {
 		});
 	};
 	const clusterH = dots.length * DOT_SIZE + (dots.length - 1) * DOT_GAP;
-	const clusterTop = rect.top + Math.max(0, (rect.height - clusterH) / 2);
+	const visibleH = Math.min(clusterH, MAX_CLUSTER_H);
+	const clusterTop = rect.top + Math.max(0, (rect.height - visibleH) / 2);
 	return react.createElement("div", {
-		className: "cj-rail",
+		className: clusterH > MAX_CLUSTER_H ? "cj-rail cj-rail-overflow" : "cj-rail",
 		style: {
 			left: rect.left,
 			top: clusterTop
@@ -228,6 +259,12 @@ const CSS = `
   width: 14px;
   z-index: 300;
   pointer-events: none;
+}
+.cj-rail-overflow {
+  pointer-events: auto;
+  overflow-y: auto;
+  max-height: 320px;
+  padding: 2px 1px;
 }
 .cj-dot {
   pointer-events: auto;
@@ -255,13 +292,15 @@ const CSS = `
 }
 `;
 function injectStyles() {
-	if (typeof document === "undefined") return;
-	if (document.querySelector("style[data-plugin-css=\"dsh-plugin-chat-jump\"]") !== null) return;
+	if (typeof document === "undefined") return () => {};
+	const selector = "style[data-plugin-css=\"dsh-plugin-chat-jump\"]";
+	if (document.querySelector(selector) !== null) return () => document.querySelector(selector)?.remove();
 	const tag = document.createElement("style");
 	tag.dataset.plugin = "dsh-plugin-chat-jump";
 	tag.dataset.pluginCss = "dsh-plugin-chat-jump";
 	tag.textContent = CSS;
 	document.head.appendChild(tag);
+	return () => tag.remove();
 }
 //#endregion
 exports.ChatJumpRail = ChatJumpRail;
