@@ -65,6 +65,7 @@ function subscribeConfig(fn) {
 }
 //#endregion
 //#region src/client/toasts.ts
+const MAX_TOASTS = 4;
 const AUTO_DISMISS_MS = 6e3;
 let toasts = [];
 let seq = 0;
@@ -80,6 +81,14 @@ function setOpenSession(fn) {
 }
 function pushToast(item) {
 	const id = ++seq;
+	if (toasts.length >= MAX_TOASTS) {
+		const evicted = toasts[0];
+		const evictedTimer = timers.get(evicted.id);
+		if (evictedTimer !== void 0) {
+			clearTimeout(evictedTimer);
+			timers.delete(evicted.id);
+		}
+	}
 	toasts = [...toasts, {
 		...item,
 		id,
@@ -128,6 +137,7 @@ function ToastStack() {
 		className: "tn-toast",
 		onClick: () => {
 			if (t.sessionId !== void 0) openSession(t.sessionId);
+			dismissToast(t.id);
 		}
 	}, react.createElement("span", { className: "tn-toast-dot" }), react.createElement("div", { className: "tn-toast-main" }, react.createElement("div", { className: "tn-toast-title" }, t.title), react.createElement("div", { className: "tn-toast-body" }, t.body)), react.createElement("button", {
 		type: "button",
@@ -306,41 +316,63 @@ const SOUND_TYPE_OPTIONS = [
 ];
 async function fetchHostConfig() {
 	try {
-		return await (await fetch("/task-notify/config")).json();
+		const res = await fetch("/task-notify/config");
+		if (!res.ok) return null;
+		const body = await res.json();
+		if (body.ok === false) return null;
+		return body;
 	} catch {
 		return null;
 	}
 }
 async function patchHostConfig(patch) {
 	try {
-		return await (await fetch("/task-notify/config", {
+		const res = await fetch("/task-notify/config", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify(patch)
-		})).json();
+		});
+		if (!res.ok) return null;
+		const body = await res.json();
+		if (body.ok === false) return null;
+		return body;
 	} catch {
 		return null;
 	}
 }
-/** 加载宿主配置到组件状态（卸载安全），并返回打补丁函数。 */
+/** 加载宿主配置到组件状态（卸载安全），并返回打补丁函数（失败回滚，乱序响应丢弃）。 */
 function useHostConfig() {
 	const [host, setHost] = react.useState(null);
+	const latestSeq = react.useRef(0);
+	const lastGood = react.useRef(null);
 	react.useEffect(() => {
 		let cancelled = false;
 		fetchHostConfig().then((h) => {
-			if (!cancelled) setHost(h);
+			if (cancelled || h === null) return;
+			lastGood.current = h;
+			setHost(h);
 		});
 		return () => {
 			cancelled = true;
 		};
 	}, []);
 	return [host, react.useCallback((p) => {
-		setHost((prev) => prev === null ? prev : {
-			...prev,
-			...p
+		setHost((prev) => {
+			if (prev === null) return prev;
+			lastGood.current = prev;
+			return {
+				...prev,
+				...p
+			};
 		});
+		const seq = ++latestSeq.current;
 		patchHostConfig(p).then((h) => {
-			if (h !== null) setHost(h);
+			if (seq !== latestSeq.current) return;
+			if (h === null) setHost(lastGood.current);
+			else {
+				lastGood.current = h;
+				setHost(h);
+			}
 		});
 	}, [])];
 }
@@ -350,7 +382,47 @@ function fireTest(host, toastOn) {
 		title: "这是一条测试通知",
 		body: "任务完成通知（测试）"
 	});
-	if (host?.desktop === true) fetch("/task-notify/test", { method: "POST" }).catch(() => {});
+	if (host?.desktop === true || host?.sound === true) fetch("/task-notify/test", { method: "POST" }).catch(() => {});
+}
+/** 音量滑杆：拖动只改本地值，停顿 250ms 或失焦后再写宿主，避免拖动期间刷请求。 */
+function VolumeSlider(props) {
+	const [draft, setDraft] = react.useState(props.value);
+	const timer = react.useRef(null);
+	react.useEffect(() => {
+		setDraft(props.value);
+		if (timer.current !== null) {
+			clearTimeout(timer.current);
+			timer.current = null;
+		}
+	}, [props.value]);
+	react.useEffect(() => () => {
+		if (timer.current !== null) clearTimeout(timer.current);
+	}, []);
+	const commit = (value) => {
+		setDraft(value);
+		if (timer.current !== null) clearTimeout(timer.current);
+		timer.current = setTimeout(() => {
+			timer.current = null;
+			props.onChange(value);
+		}, 250);
+	};
+	return react.createElement("div", { className: "tn-volume" }, react.createElement("input", {
+		type: "range",
+		min: 0,
+		max: 100,
+		step: 5,
+		value: draft,
+		disabled: props.disabled,
+		className: "tn-range",
+		onChange: (e) => commit(Number(e.target.value)),
+		onBlur: () => {
+			if (timer.current !== null) {
+				clearTimeout(timer.current);
+				timer.current = null;
+			}
+			props.onChange(draft);
+		}
+	}), react.createElement("span", { className: "tn-volume-value" }, `${draft}%`));
 }
 /**
 * settings.general.item 设置行（重做版）：紧凑卡片，快速开关 + 测试。
@@ -436,16 +508,11 @@ function TaskNotifySection(_props) {
 		options: SOUND_TYPE_OPTIONS,
 		onChange: (v) => patchHost({ soundType: String(v) }),
 		disabled: host === null
-	})), react.createElement("div", { className: "tn-field" }, react.createElement("div", { className: "tn-field-label" }, react.createElement("span", null, "音量"), host?.soundType === "system" ? react.createElement("span", { className: "tn-field-sub" }, "系统提示音不支持调节") : null), react.createElement("div", { className: "tn-volume" }, react.createElement("input", {
-		type: "range",
-		min: 0,
-		max: 100,
-		step: 5,
+	})), react.createElement("div", { className: "tn-field" }, react.createElement("div", { className: "tn-field-label" }, react.createElement("span", null, "音量"), host?.soundType === "system" ? react.createElement("span", { className: "tn-field-sub" }, "系统提示音不支持调节") : null), react.createElement(VolumeSlider, {
 		value: host?.volume ?? 80,
 		disabled: host === null || host?.soundType === "system",
-		className: "tn-range",
-		onChange: (e) => patchHost({ volume: Number(e.target.value) })
-	}), react.createElement("span", { className: "tn-volume-value" }, `${host?.volume ?? 80}%`)))), react.createElement("div", { className: "tn-page-actions" }, react.createElement("button", {
+		onChange: (v) => patchHost({ volume: v })
+	}))), react.createElement("div", { className: "tn-page-actions" }, react.createElement("button", {
 		type: "button",
 		className: "tn-btn tn-btn-primary",
 		onClick: () => fireTest(host, cfg.toast)
@@ -816,15 +883,16 @@ const CSS = `
   font-variant-numeric: tabular-nums;
 }
 `;
-/** 注入插件样式（幂等；每次检查 DOM，插件停止后再次启用也能恢复样式）。 */
+/** 注入插件样式（幂等）；返回清理函数，由 apply 挂到 ctx.effect。 */
 function injectStyles() {
-	if (typeof document === "undefined") return;
-	if (document.querySelector("style[data-plugin-css=\"dsh-plugin-task-notify\"]") !== null) return;
+	if (typeof document === "undefined") return () => {};
+	if (document.querySelector("style[data-plugin-css=\"dsh-plugin-task-notify\"]") !== null) return () => document.querySelector("style[data-plugin-css=\"dsh-plugin-task-notify\"]")?.remove();
 	const tag = document.createElement("style");
 	tag.dataset.plugin = "dsh-plugin-task-notify";
 	tag.dataset.pluginCss = "dsh-plugin-task-notify";
 	tag.textContent = CSS;
 	document.head.appendChild(tag);
+	return () => tag.remove();
 }
 //#endregion
 //#region src/client.ts
@@ -839,7 +907,7 @@ const inject = ["sessions", "slots"];
 * UI 全部走槽位：shell.overlay（toast 堆栈）+ settings.general.item（设置行）。
 */
 function apply(ctx) {
-	injectStyles();
+	ctx.effect(() => injectStyles(), "task-notify: styles");
 	ctx.effect(() => disposeToasts);
 	const sessions = ctx.get("sessions");
 	const slots = ctx.get("slots");

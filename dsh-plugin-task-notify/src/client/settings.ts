@@ -68,7 +68,10 @@ const SOUND_TYPE_OPTIONS = [
 async function fetchHostConfig(): Promise<HostConfig | null> {
   try {
     const res = await fetch('/task-notify/config')
-    return (await res.json()) as HostConfig
+    if (!res.ok) return null
+    const body = (await res.json()) as HostConfig & { ok?: boolean; error?: string }
+    if (body.ok === false) return null
+    return body
   } catch {
     return null
   }
@@ -81,28 +84,46 @@ async function patchHostConfig(patch: Partial<HostConfig>): Promise<HostConfig |
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(patch),
     })
-    return (await res.json()) as HostConfig
+    if (!res.ok) return null
+    const body = (await res.json()) as HostConfig & { ok?: boolean; error?: string }
+    if (body.ok === false) return null
+    return body
   } catch {
     return null
   }
 }
 
-/** 加载宿主配置到组件状态（卸载安全），并返回打补丁函数。 */
+/** 加载宿主配置到组件状态（卸载安全），并返回打补丁函数（失败回滚，乱序响应丢弃）。 */
 function useHostConfig(): [HostConfig | null, (patch: Partial<HostConfig>) => void] {
   const [host, setHost] = React.useState<HostConfig | null>(null)
+  const latestSeq = React.useRef(0)
+  const lastGood = React.useRef<HostConfig | null>(null)
   React.useEffect(() => {
     let cancelled = false
     void fetchHostConfig().then((h) => {
-      if (!cancelled) setHost(h)
+      if (cancelled || h === null) return
+      lastGood.current = h
+      setHost(h)
     })
     return () => {
       cancelled = true
     }
   }, [])
   const patch = React.useCallback((p: Partial<HostConfig>) => {
-    setHost((prev) => (prev === null ? prev : { ...prev, ...p }))
+    setHost((prev) => {
+      if (prev === null) return prev
+      lastGood.current = prev
+      return { ...prev, ...p }
+    })
+    const seq = ++latestSeq.current
     void patchHostConfig(p).then((h) => {
-      if (h !== null) setHost(h)
+      if (seq !== latestSeq.current) return
+      if (h === null) {
+        setHost(lastGood.current)
+      } else {
+        lastGood.current = h
+        setHost(h)
+      }
     })
   }, [])
   return [host, patch]
@@ -113,11 +134,61 @@ function fireTest(host: HostConfig | null, toastOn: boolean): void {
   if (toastOn) {
     pushToast({ title: '这是一条测试通知', body: '任务完成通知（测试）' })
   }
-  if (host?.desktop === true) {
+  if (host?.desktop === true || host?.sound === true) {
     void fetch('/task-notify/test', { method: 'POST' }).catch(() => {
       /* 静默：宿主侧不可达时仅 toast 生效 */
     })
   }
+}
+
+/** 音量滑杆：拖动只改本地值，停顿 250ms 或失焦后再写宿主，避免拖动期间刷请求。 */
+function VolumeSlider(props: {
+  value: number
+  disabled?: boolean
+  onChange: (value: number) => void
+}): React.ReactElement {
+  const [draft, setDraft] = React.useState(props.value)
+  const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  React.useEffect(() => {
+    setDraft(props.value)
+    if (timer.current !== null) {
+      clearTimeout(timer.current)
+      timer.current = null
+    }
+  }, [props.value])
+  React.useEffect(() => () => {
+    if (timer.current !== null) clearTimeout(timer.current)
+  }, [])
+  const commit = (value: number): void => {
+    setDraft(value)
+    if (timer.current !== null) clearTimeout(timer.current)
+    timer.current = setTimeout(() => {
+      timer.current = null
+      props.onChange(value)
+    }, 250)
+  }
+  return React.createElement(
+    'div',
+    { className: 'tn-volume' },
+    React.createElement('input', {
+      type: 'range',
+      min: 0,
+      max: 100,
+      step: 5,
+      value: draft,
+      disabled: props.disabled,
+      className: 'tn-range',
+      onChange: (e: React.ChangeEvent<HTMLInputElement>) => commit(Number(e.target.value)),
+      onBlur: () => {
+        if (timer.current !== null) {
+          clearTimeout(timer.current)
+          timer.current = null
+        }
+        props.onChange(draft)
+      },
+    }),
+    React.createElement('span', { className: 'tn-volume-value' }, `${draft}%`),
+  )
 }
 
 /**
@@ -364,21 +435,11 @@ export function TaskNotifySection(_props: { close: () => void }): React.ReactEle
             ? React.createElement('span', { className: 'tn-field-sub' }, '系统提示音不支持调节')
             : null,
         ),
-        React.createElement(
-          'div',
-          { className: 'tn-volume' },
-          React.createElement('input', {
-            type: 'range',
-            min: 0,
-            max: 100,
-            step: 5,
-            value: host?.volume ?? 80,
-            disabled: host === null || host?.soundType === 'system',
-            className: 'tn-range',
-            onChange: (e: React.ChangeEvent<HTMLInputElement>) => patchHost({ volume: Number(e.target.value) }),
-          }),
-          React.createElement('span', { className: 'tn-volume-value' }, `${host?.volume ?? 80}%`),
-        ),
+        React.createElement(VolumeSlider, {
+          value: host?.volume ?? 80,
+          disabled: host === null || host?.soundType === 'system',
+          onChange: (v) => patchHost({ volume: v }),
+        }),
       ),
     ),
 

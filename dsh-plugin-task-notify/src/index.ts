@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
@@ -96,6 +96,25 @@ interface AgentLike {
   }
 }
 
+/** session/event 回调里 session 的最小结构视图（只读所需叶子字段）。 */
+interface SessionEventSourceLike {
+  header?: {
+    origin?: string
+    parentSession?: string
+  }
+}
+
+/** approval/request 回调里 req 的最小结构视图（只读所需叶子字段）。 */
+interface ApprovalRequestLike {
+  agent?: AgentLike
+}
+
+/** 子代理会话（origin=subagent 或存在 parentSession）不提醒，避免噪声。 */
+function isSubagentSession(session: SessionEventSourceLike | undefined): boolean {
+  const header = session?.header
+  return header?.origin === 'subagent' || header?.parentSession !== undefined
+}
+
 /** 会话事件的最小结构视图（只读所需叶子字段）。 */
 interface SessionEventLike {
   type: string
@@ -113,10 +132,10 @@ interface SessionEventLike {
 interface AgentEvents {
   on(name: 'agent/status', listener: (payload: { agent: AgentLike; status: string }) => void): () => void
   on(name: 'agent/disposed', listener: (payload: { agent: { id: string } }) => void): () => void
-  on(name: 'session/event', listener: (session: unknown, event: SessionEventLike) => void): () => void
+  on(name: 'session/event', listener: (session: SessionEventSourceLike, event: SessionEventLike) => void): () => void
   on(
     name: 'approval/request',
-    listener: (req: unknown, next: () => Promise<unknown>) => Promise<unknown> | unknown,
+    listener: (req: ApprovalRequestLike, next: () => Promise<unknown>) => Promise<unknown> | unknown,
   ): () => void
 }
 
@@ -124,7 +143,7 @@ const DSH_HOME = process.env.DSH_HOME ?? join(homedir(), '.dsh')
 const CONFIG_DIR = join(DSH_HOME, 'plugins')
 const CONFIG_PATH = join(CONFIG_DIR, 'task-notify.json')
 const SOUND_DIR = join(tmpdir(), 'dsh-task-notify-sound')
-const WEB_URL = process.env.DSH_WEB_URL ?? 'http://127.0.0.1:3080'
+let WEB_URL = process.env.DSH_WEB_URL ?? 'http://127.0.0.1:3080'
 
 // 防抖窗口：连续完成（如排队消息逐条跑完）只弹一次
 const DEBOUNCE_MS = 2000
@@ -241,7 +260,7 @@ $form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
 $form.TopMost = $true
 $form.ShowInTaskbar = $false
 $form.BackColor = $bg
-$form.Width = 340
+$form.Width = [Math]::Max(340, [Math]::Min(640, 44 + ([Math]::Max($Title.Length, $Text.Length) * $FontSize)))
 $form.Height = 92
 $form.Font = New-Object System.Drawing.Font($FontFamily, $FontSize)
 
@@ -255,6 +274,7 @@ $titleLabel = New-Object System.Windows.Forms.Label
 $titleLabel.Text = $Title
 $titleLabel.ForeColor = $fg
 $titleLabel.Font = New-Object System.Drawing.Font($FontFamily, ($FontSize + 1), [System.Drawing.FontStyle]::Bold)
+$titleLabel.MaximumSize = New-Object System.Drawing.Size(($form.Width - 46), 0)
 $titleLabel.Location = New-Object System.Drawing.Point(16, 10)
 $titleLabel.AutoSize = $true
 $form.Controls.Add($titleLabel)
@@ -263,6 +283,7 @@ $bodyLabel = New-Object System.Windows.Forms.Label
 $bodyLabel.Text = $Text
 $bodyLabel.ForeColor = $sub
 $bodyLabel.Font = New-Object System.Drawing.Font($FontFamily, $FontSize)
+$bodyLabel.MaximumSize = New-Object System.Drawing.Size(($form.Width - 48), 0)
 $bodyLabel.Location = New-Object System.Drawing.Point(16, 38)
 $bodyLabel.AutoSize = $true
 $form.Controls.Add($bodyLabel)
@@ -312,15 +333,29 @@ function loadConfig(): NotifyConfig {
     if (!existsSync(CONFIG_PATH)) return { ...DEFAULTS }
     return sanitizeConfig(JSON.parse(readFileSync(CONFIG_PATH, 'utf8')))
   } catch {
-    return { ...DEFAULTS }
+    // 配置损坏时回退默认值，并尝试原子重建，避免每次请求都重复解析失败。
+    const fallback = { ...DEFAULTS }
+    try {
+      saveConfig(fallback)
+    } catch {
+      // 重建失败仍以默认值运行
+    }
+    return fallback
   }
 }
 
 function saveConfig(cfg: NotifyConfig): void {
+  const tempPath = `${CONFIG_PATH}.tmp`
   try {
     mkdirSync(CONFIG_DIR, { recursive: true })
-    writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf8')
+    writeFileSync(tempPath, JSON.stringify(cfg, null, 2), 'utf8')
+    renameSync(tempPath, CONFIG_PATH)
   } catch (error) {
+    try {
+      unlinkSync(tempPath)
+    } catch {
+      // 临时文件可能不存在，忽略
+    }
     console.error('[task-notify] 保存配置失败:', error)
   }
 }
@@ -333,6 +368,16 @@ function ensureSoundFile(type: string): string {
     if (!existsSync(file)) {
       mkdirSync(SOUND_DIR, { recursive: true })
       writeFileSync(file, synthSound(type as Exclude<SoundType, 'system'>, config.volume))
+      // 同一音色只保留最新音量档的缓存，避免临时目录随音量调整无限增长。
+      for (const old of readdirSync(SOUND_DIR)) {
+        if (old === `${type}-${config.volume}.wav`) continue
+        if (!old.startsWith(`${type}-`) || !old.endsWith('.wav')) continue
+        try {
+          unlinkSync(join(SOUND_DIR, old))
+        } catch {
+          // 正在播放的旧文件可能被占用，忽略
+        }
+      }
     }
     return file
   } catch {
@@ -344,22 +389,38 @@ function ensureSoundFile(type: string): string {
 function playSoundOnly(soundType: string): void {
   if (process.platform !== 'win32') return
   try {
-    const command =
-      soundType === 'system'
-        ? `[System.Media.SystemSounds]::Asterisk.Play(); Start-Sleep -Milliseconds 900`
-        : `$p = New-Object System.Media.SoundPlayer '${ensureSoundFile(soundType)}'; $p.PlaySync()`
-    const child = spawn(
-      'powershell.exe',
-      ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', command],
-      { windowsHide: true, stdio: 'ignore' },
-    )
-    child.unref()
-    child.on('error', () => {
-      // 播放失败静默忽略
-    })
+    if (soundType === 'system') {
+      spawnHiddenPowerShell(`[System.Media.SystemSounds]::Asterisk.Play(); Start-Sleep -Milliseconds 900`)
+      return
+    }
+    const soundPath = ensureSoundFile(soundType)
+    if (soundPath === '') return
+    const command = `$p = New-Object System.Media.SoundPlayer $env:DSH_TASK_NOTIFY_SOUND_PATH; $p.PlaySync()`
+    const encoded = Buffer.from(command, 'utf16le').toString('base64')
+    spawnHiddenPowerShell(encoded, { DSH_TASK_NOTIFY_SOUND_PATH: soundPath }, true)
   } catch (error) {
     console.error('[task-notify] 播放提示音失败:', error)
   }
+}
+
+/** 以隐藏窗口启动 PowerShell，返回已 unref 的 child（失败静默）。 */
+function spawnHiddenPowerShell(
+  commandOrEncoded: string,
+  extraEnv: Record<string, string> = {},
+  encoded = false,
+): void {
+  const args = encoded
+    ? ['-NoProfile', '-WindowStyle', 'Hidden', '-EncodedCommand', commandOrEncoded]
+    : ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', commandOrEncoded]
+  const child = spawn('powershell.exe', args, {
+    windowsHide: true,
+    stdio: 'ignore',
+    env: { ...process.env, ...extraEnv },
+  })
+  child.unref()
+  child.on('error', () => {
+    // 播放失败静默忽略
+  })
 }
 
 /** 按当前配置弹飞书式置顶卡片（fire-and-forget，不阻塞宿主；不依赖系统通知开关）。 */
@@ -383,7 +444,7 @@ function showPopup(
     }
   }
   try {
-    writeFileSync(scriptPath, POPUP_SCRIPT, 'utf8')
+    writeFileSync(scriptPath, `﻿${POPUP_SCRIPT}`, 'utf8')
     const child = spawn(
       'powershell.exe',
       [
@@ -421,28 +482,37 @@ function showPopup(
   }
 }
 
-function readJsonBody(req: import('node:http').IncomingMessage): Promise<unknown> {
+type JsonBodyResult =
+  | { ok: true; value: unknown }
+  | { ok: false; status: number; error: string }
+
+function readJsonBody(req: import('node:http').IncomingMessage): Promise<JsonBodyResult> {
   return new Promise((resolve) => {
     let data = ''
-    let tooLarge = false
+    let settled = false
     req.on('data', (chunk: Buffer) => {
-      if (tooLarge) return
+      if (settled) return
       data += chunk.toString('utf8')
       if (Buffer.byteLength(data, 'utf8') > MAX_JSON_BODY_BYTES) {
-        tooLarge = true
-        resolve(null)
-        req.destroy()
+        settled = true
+        req.pause()
+        resolve({ ok: false, status: 413, error: '请求体过大' })
       }
     })
     req.on('end', () => {
-      if (tooLarge) return
+      if (settled) return
+      settled = true
       try {
-        resolve(JSON.parse(data))
+        resolve({ ok: true, value: JSON.parse(data) })
       } catch {
-        resolve(null)
+        resolve({ ok: false, status: 400, error: '请求体不是合法 JSON' })
       }
     })
-    req.on('error', () => resolve(null))
+    req.on('error', () => {
+      if (settled) return
+      settled = true
+      resolve({ ok: false, status: 400, error: '请求体读取失败' })
+    })
   })
 }
 
@@ -454,7 +524,9 @@ function sendJson(res: import('node:http').ServerResponse, status: number, body:
 let config = loadConfig()
 
 export function apply(ctx: Context): void {
-  const webServer = ctx.get('webServer') as { register(opts: unknown): () => void } | undefined
+  const webServer = ctx.get('webServer') as
+    | { register(opts: unknown): () => void; port?: number; host?: string }
+    | undefined
   const sessionTitle = ctx.get('sessionTitle') as
     | { get(session: unknown): { title: string } | undefined }
     | undefined
@@ -494,11 +566,17 @@ export function apply(ctx: Context): void {
     running.delete(payload.agent.id)
   })
 
+  // 按实际 webServer 端口构造卡片点击目标；环境变量优先。
+  if (process.env.DSH_WEB_URL === undefined && webServer !== undefined && typeof webServer.port === 'number') {
+    WEB_URL = `http://127.0.0.1:${webServer.port}`
+  }
+
   // ── 等待输入/审批检测：阻塞工具出现即提醒 ────────────────
   // ask_user_question / exit_plan_mode 的工具执行会阻塞等待用户输入，
   // 期间 agent 状态保持 running（无 idle 翻转），完成通知不会触发，
   // 因此在这里直接监听会话事件中的 tool/call。
-  events.on('session/event', (_session, event) => {
+  events.on('session/event', (session, event) => {
+    if (isSubagentSession(session)) return
     if (event?.type !== 'tool/call') return
     const name = event.data?.name
     if (name === undefined || !BLOCKING_TOOLS.has(name)) return
@@ -510,8 +588,10 @@ export function apply(ctx: Context): void {
   })
 
   // 工具执行审批（沙箱/危险操作）等待用户决定
-  events.on('approval/request', (_req, next) => {
-    fireWaitNotify('等待操作审批', '有一项操作等待你审批')
+  events.on('approval/request', (req, next) => {
+    if (!isSubagentSession(req.agent?.session)) {
+      fireWaitNotify('等待操作审批', '有一项操作等待你审批')
+    }
     return next()
   })
 
@@ -526,7 +606,12 @@ export function apply(ctx: Context): void {
           return
         }
         if (req.method === 'POST') {
-          void readJsonBody(req).then((body) => {
+          void readJsonBody(req).then((result) => {
+            if (!result.ok) {
+              sendJson(res, result.status, { ok: false, error: result.error })
+              return
+            }
+            const body = result.value
             const patch = (typeof body === 'object' && body !== null ? body : {}) as Partial<NotifyConfig>
             const keys = Object.keys(patch) as (keyof NotifyConfig)[]
             if (keys.length === 0) {
@@ -546,7 +631,7 @@ export function apply(ctx: Context): void {
               volume: true,
             }
             for (const key of keys) {
-              if (!known[key]) {
+              if (!Object.hasOwn(known, key)) {
                 sendJson(res, 400, { ok: false, error: `未知配置项: ${key}` })
                 return
               }
@@ -602,12 +687,16 @@ export function apply(ctx: Context): void {
           sendJson(res, 200, { ok: false, supported: false, error: '桌面通知仅支持 Windows' })
           return
         }
+        if (!config.desktop && !config.sound) {
+          sendJson(res, 200, { ok: false, supported: true, error: '桌面通知与提示音都已关闭' })
+          return
+        }
         if (config.desktop) {
           showPopup('任务完成通知（测试）', '桌面通知通道工作正常 ✓', WEB_URL, config.sound, config.soundType)
         } else if (config.sound) {
           playSoundOnly(config.soundType)
         }
-        sendJson(res, 200, { ok: true, supported: true })
+        sendJson(res, 200, { ok: true, supported: true, channels: { desktop: config.desktop, sound: config.sound } })
       },
     }))
   }

@@ -19,7 +19,7 @@ export const inject = ['sessions', 'slots']
  * UI 全部走槽位：shell.overlay（toast 堆栈）+ settings.general.item（设置行）。
  */
 export function apply(ctx: Context): void {
-  injectStyles()
+  ctx.effect(() => injectStyles(), 'task-notify: styles')
 
   // 卸载时清理 toast 定时器与监听
   ctx.effect(() => disposeToasts)

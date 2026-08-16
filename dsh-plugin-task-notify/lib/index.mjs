@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 //#region src/sound.ts
@@ -182,11 +182,16 @@ function sanitizeConfig(raw) {
 		volume: typeof src.volume === "number" && Number.isFinite(src.volume) ? Math.max(0, Math.min(100, Math.round(src.volume))) : DEFAULTS.volume
 	};
 }
+/** 子代理会话（origin=subagent 或存在 parentSession）不提醒，避免噪声。 */
+function isSubagentSession(session) {
+	const header = session?.header;
+	return header?.origin === "subagent" || header?.parentSession !== void 0;
+}
 const DSH_HOME = process.env.DSH_HOME ?? join(homedir(), ".dsh");
 const CONFIG_DIR = join(DSH_HOME, "plugins");
 const CONFIG_PATH = join(CONFIG_DIR, "task-notify.json");
 const SOUND_DIR = join(tmpdir(), "dsh-task-notify-sound");
-const WEB_URL = process.env.DSH_WEB_URL ?? "http://127.0.0.1:3080";
+let WEB_URL = process.env.DSH_WEB_URL ?? "http://127.0.0.1:3080";
 const DEBOUNCE_MS = 2e3;
 /** HTTP 桥 JSON body 大小上限（本地接口，防止异常请求占用内存）。 */
 const MAX_JSON_BODY_BYTES = 65536;
@@ -287,7 +292,7 @@ $form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
 $form.TopMost = $true
 $form.ShowInTaskbar = $false
 $form.BackColor = $bg
-$form.Width = 340
+$form.Width = [Math]::Max(340, [Math]::Min(640, 44 + ([Math]::Max($Title.Length, $Text.Length) * $FontSize)))
 $form.Height = 92
 $form.Font = New-Object System.Drawing.Font($FontFamily, $FontSize)
 
@@ -301,6 +306,7 @@ $titleLabel = New-Object System.Windows.Forms.Label
 $titleLabel.Text = $Title
 $titleLabel.ForeColor = $fg
 $titleLabel.Font = New-Object System.Drawing.Font($FontFamily, ($FontSize + 1), [System.Drawing.FontStyle]::Bold)
+$titleLabel.MaximumSize = New-Object System.Drawing.Size(($form.Width - 46), 0)
 $titleLabel.Location = New-Object System.Drawing.Point(16, 10)
 $titleLabel.AutoSize = $true
 $form.Controls.Add($titleLabel)
@@ -309,6 +315,7 @@ $bodyLabel = New-Object System.Windows.Forms.Label
 $bodyLabel.Text = $Text
 $bodyLabel.ForeColor = $sub
 $bodyLabel.Font = New-Object System.Drawing.Font($FontFamily, $FontSize)
+$bodyLabel.MaximumSize = New-Object System.Drawing.Size(($form.Width - 48), 0)
 $bodyLabel.Location = New-Object System.Drawing.Point(16, 38)
 $bodyLabel.AutoSize = $true
 $form.Controls.Add($bodyLabel)
@@ -357,14 +364,23 @@ function loadConfig() {
 		if (!existsSync(CONFIG_PATH)) return { ...DEFAULTS };
 		return sanitizeConfig(JSON.parse(readFileSync(CONFIG_PATH, "utf8")));
 	} catch {
-		return { ...DEFAULTS };
+		const fallback = { ...DEFAULTS };
+		try {
+			saveConfig(fallback);
+		} catch {}
+		return fallback;
 	}
 }
 function saveConfig(cfg) {
+	const tempPath = `${CONFIG_PATH}.tmp`;
 	try {
 		mkdirSync(CONFIG_DIR, { recursive: true });
-		writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), "utf8");
+		writeFileSync(tempPath, JSON.stringify(cfg, null, 2), "utf8");
+		renameSync(tempPath, CONFIG_PATH);
 	} catch (error) {
+		try {
+			unlinkSync(tempPath);
+		} catch {}
 		console.error("[task-notify] 保存配置失败:", error);
 	}
 }
@@ -376,6 +392,13 @@ function ensureSoundFile(type) {
 		if (!existsSync(file)) {
 			mkdirSync(SOUND_DIR, { recursive: true });
 			writeFileSync(file, synthSound(type, config.volume));
+			for (const old of readdirSync(SOUND_DIR)) {
+				if (old === `${type}-${config.volume}.wav`) continue;
+				if (!old.startsWith(`${type}-`) || !old.endsWith(".wav")) continue;
+				try {
+					unlinkSync(join(SOUND_DIR, old));
+				} catch {}
+			}
 		}
 		return file;
 	} catch {
@@ -386,22 +409,41 @@ function ensureSoundFile(type) {
 function playSoundOnly(soundType) {
 	if (process.platform !== "win32") return;
 	try {
-		const command = soundType === "system" ? `[System.Media.SystemSounds]::Asterisk.Play(); Start-Sleep -Milliseconds 900` : `$p = New-Object System.Media.SoundPlayer '${ensureSoundFile(soundType)}'; $p.PlaySync()`;
-		const child = spawn("powershell.exe", [
-			"-NoProfile",
-			"-WindowStyle",
-			"Hidden",
-			"-Command",
-			command
-		], {
-			windowsHide: true,
-			stdio: "ignore"
-		});
-		child.unref();
-		child.on("error", () => {});
+		if (soundType === "system") {
+			spawnHiddenPowerShell(`[System.Media.SystemSounds]::Asterisk.Play(); Start-Sleep -Milliseconds 900`);
+			return;
+		}
+		const soundPath = ensureSoundFile(soundType);
+		if (soundPath === "") return;
+		spawnHiddenPowerShell(Buffer.from(`$p = New-Object System.Media.SoundPlayer $env:DSH_TASK_NOTIFY_SOUND_PATH; $p.PlaySync()`, "utf16le").toString("base64"), { DSH_TASK_NOTIFY_SOUND_PATH: soundPath }, true);
 	} catch (error) {
 		console.error("[task-notify] 播放提示音失败:", error);
 	}
+}
+/** 以隐藏窗口启动 PowerShell，返回已 unref 的 child（失败静默）。 */
+function spawnHiddenPowerShell(commandOrEncoded, extraEnv = {}, encoded = false) {
+	const child = spawn("powershell.exe", encoded ? [
+		"-NoProfile",
+		"-WindowStyle",
+		"Hidden",
+		"-EncodedCommand",
+		commandOrEncoded
+	] : [
+		"-NoProfile",
+		"-WindowStyle",
+		"Hidden",
+		"-Command",
+		commandOrEncoded
+	], {
+		windowsHide: true,
+		stdio: "ignore",
+		env: {
+			...process.env,
+			...extraEnv
+		}
+	});
+	child.unref();
+	child.on("error", () => {});
 }
 /** 按当前配置弹飞书式置顶卡片（fire-and-forget，不阻塞宿主；不依赖系统通知开关）。 */
 function showPopup(title, text, url = WEB_URL, soundOn = false, soundType = "apple") {
@@ -413,7 +455,7 @@ function showPopup(title, text, url = WEB_URL, soundOn = false, soundType = "app
 		} catch {}
 	};
 	try {
-		writeFileSync(scriptPath, POPUP_SCRIPT, "utf8");
+		writeFileSync(scriptPath, `﻿${POPUP_SCRIPT}`, "utf8");
 		const child = spawn("powershell.exe", [
 			"-NoProfile",
 			"-WindowStyle",
@@ -451,25 +493,45 @@ function showPopup(title, text, url = WEB_URL, soundOn = false, soundType = "app
 function readJsonBody(req) {
 	return new Promise((resolve) => {
 		let data = "";
-		let tooLarge = false;
+		let settled = false;
 		req.on("data", (chunk) => {
-			if (tooLarge) return;
+			if (settled) return;
 			data += chunk.toString("utf8");
 			if (Buffer.byteLength(data, "utf8") > MAX_JSON_BODY_BYTES) {
-				tooLarge = true;
-				resolve(null);
-				req.destroy();
+				settled = true;
+				req.pause();
+				resolve({
+					ok: false,
+					status: 413,
+					error: "请求体过大"
+				});
 			}
 		});
 		req.on("end", () => {
-			if (tooLarge) return;
+			if (settled) return;
+			settled = true;
 			try {
-				resolve(JSON.parse(data));
+				resolve({
+					ok: true,
+					value: JSON.parse(data)
+				});
 			} catch {
-				resolve(null);
+				resolve({
+					ok: false,
+					status: 400,
+					error: "请求体不是合法 JSON"
+				});
 			}
 		});
-		req.on("error", () => resolve(null));
+		req.on("error", () => {
+			if (settled) return;
+			settled = true;
+			resolve({
+				ok: false,
+				status: 400,
+				error: "请求体读取失败"
+			});
+		});
 	});
 }
 function sendJson(res, status, body) {
@@ -504,15 +566,17 @@ function apply(ctx) {
 	events.on("agent/disposed", (payload) => {
 		running.delete(payload.agent.id);
 	});
-	events.on("session/event", (_session, event) => {
+	if (process.env.DSH_WEB_URL === void 0 && webServer !== void 0 && typeof webServer.port === "number") WEB_URL = `http://127.0.0.1:${webServer.port}`;
+	events.on("session/event", (session, event) => {
+		if (isSubagentSession(session)) return;
 		if (event?.type !== "tool/call") return;
 		const name = event.data?.name;
 		if (name === void 0 || !BLOCKING_TOOLS.has(name)) return;
 		if (name === "ask_user_question") fireWaitNotify("需要你回答", waitBody(name, event.data?.arguments));
 		else fireWaitNotify("计划等待审批", waitBody(name, event.data?.arguments));
 	});
-	events.on("approval/request", (_req, next) => {
-		fireWaitNotify("等待操作审批", "有一项操作等待你审批");
+	events.on("approval/request", (req, next) => {
+		if (!isSubagentSession(req.agent?.session)) fireWaitNotify("等待操作审批", "有一项操作等待你审批");
 		return next();
 	});
 	if (webServer !== void 0) {
@@ -528,7 +592,15 @@ function apply(ctx) {
 					return;
 				}
 				if (req.method === "POST") {
-					readJsonBody(req).then((body) => {
+					readJsonBody(req).then((result) => {
+						if (!result.ok) {
+							sendJson(res, result.status, {
+								ok: false,
+								error: result.error
+							});
+							return;
+						}
+						const body = result.value;
 						const patch = typeof body === "object" && body !== null ? body : {};
 						const keys = Object.keys(patch);
 						if (keys.length === 0) {
@@ -550,7 +622,7 @@ function apply(ctx) {
 							soundType: true,
 							volume: true
 						};
-						for (const key of keys) if (!known[key]) {
+						for (const key of keys) if (!Object.hasOwn(known, key)) {
 							sendJson(res, 400, {
 								ok: false,
 								error: `未知配置项: ${key}`
@@ -605,11 +677,23 @@ function apply(ctx) {
 					});
 					return;
 				}
+				if (!config.desktop && !config.sound) {
+					sendJson(res, 200, {
+						ok: false,
+						supported: true,
+						error: "桌面通知与提示音都已关闭"
+					});
+					return;
+				}
 				if (config.desktop) showPopup("任务完成通知（测试）", "桌面通知通道工作正常 ✓", WEB_URL, config.sound, config.soundType);
 				else if (config.sound) playSoundOnly(config.soundType);
 				sendJson(res, 200, {
 					ok: true,
-					supported: true
+					supported: true,
+					channels: {
+						desktop: config.desktop,
+						sound: config.sound
+					}
 				});
 			}
 		}));

@@ -333,13 +333,16 @@ const CSS = `
 }
 `
 
-/** 注入插件样式（幂等；每次检查 DOM，插件停止后再次启用也能恢复样式）。 */
-export function injectStyles(): void {
-  if (typeof document === 'undefined') return
-  if (document.querySelector('style[data-plugin-css="dsh-plugin-task-notify"]') !== null) return
+/** 注入插件样式（幂等）；返回清理函数，由 apply 挂到 ctx.effect。 */
+export function injectStyles(): () => void {
+  if (typeof document === 'undefined') return () => {}
+  if (document.querySelector('style[data-plugin-css="dsh-plugin-task-notify"]') !== null) {
+    return () => document.querySelector('style[data-plugin-css="dsh-plugin-task-notify"]')?.remove()
+  }
   const tag = document.createElement('style')
   tag.dataset.plugin = 'dsh-plugin-task-notify'
   tag.dataset.pluginCss = 'dsh-plugin-task-notify'
   tag.textContent = CSS
   document.head.appendChild(tag)
+  return () => tag.remove()
 }

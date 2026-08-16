@@ -30,6 +30,14 @@ export function setOpenSession(fn: (sessionId: string) => void): void {
 
 export function pushToast(item: Omit<ToastItem, 'id' | 'createdAt'>): void {
   const id = ++seq
+  if (toasts.length >= MAX_TOASTS) {
+    const evicted = toasts[0]
+    const evictedTimer = timers.get(evicted.id)
+    if (evictedTimer !== undefined) {
+      clearTimeout(evictedTimer)
+      timers.delete(evicted.id)
+    }
+  }
   toasts = [...toasts, { ...item, id, createdAt: Date.now() }].slice(-MAX_TOASTS)
   const timer = setTimeout(() => {
     timers.delete(id)
@@ -85,6 +93,7 @@ export function ToastStack(): React.ReactElement | null {
           className: 'tn-toast',
           onClick: () => {
             if (t.sessionId !== undefined) openSession(t.sessionId)
+            dismissToast(t.id)
           },
         },
         React.createElement('span', { className: 'tn-toast-dot' }),
