@@ -14,6 +14,7 @@ DSH 是 Web UI，任务跑完没有提醒——切到别的窗口等结果时容
 - **完成检测（双通道）**：
   - Host 半监听 `agent/status`（running→idle = 一轮任务完成），2 秒防抖。
   - Client 半订阅 `sessions.list` 快照做页面内提示。
+- **出错提醒**：Host 半监听 `agent/error`，任务失败时弹**红色错误卡片**（独立 2 秒防抖），可在设置中关闭；桌面关闭、提示音开启时只播放提示音。
 - **过滤子代理**：子代理会话不提醒，避免噪声。
 - **设置行 + 设置页**：设置页 → General 一节新增"任务完成通知"快速行（桌面/应用内/提示音开关 + 测试）；设置导航新增完整页面「任务完成通知」，含通道开关、卡片样式、字体、提示音与音量配置及测试预览。
 
@@ -41,7 +42,7 @@ src/
 
 > 点击桌面卡片默认打开 `http://127.0.0.1:3080`；如 DSH 端口不同，可设置环境变量 `DSH_WEB_URL` 覆盖。
 
-**Client 半**：订阅 `sessions.list` 完成翻转 → 应用内 toast；设置行通过 `fetch` 调 HTTP 桥控制宿主开关。客户端不再使用浏览器 Notification API（系统级通知统一由宿主负责）。
+**Client 半**：订阅 `sessions.list` 完成翻转 → 应用内 toast；设置行通过 `fetch` 调 HTTP 桥控制宿主开关。客户端不再使用浏览器 Notification API（系统级通知统一由宿主负责）。设置 UI 已接入 `ctx.locale`（中/英文案）。
 
 ## 构建
 
@@ -85,13 +86,10 @@ dsh plugin --profile web add "link:<本插件文件夹绝对路径>"
 
 - 桌面通知**仅支持 Windows**（PowerShell + WinForms 置顶卡片）；其他平台暂只有应用内 toast。
 - 置顶卡片是自绘窗口（非系统通知），不会进入 Windows 通知中心历史；样式可在设置页配置（深/浅主题、强调色、位置、字体等）。
-- 只报"完成"，不报"出错"（`agent/error` 监听可作后续增强）。
 - 连续多轮快速完成有 2 秒防抖合并；toast 栈最多保留 4 条，自动消失。
 
 ## 路线图
 
-- [ ] 出错提醒（宿主监听 `agent/error` → 桌面通知 + 页面红标）
 - [ ] 后台任务/工作流/子代理完成提醒
 - [ ] 长任务完成后再提醒（防打扰）
 - [ ] 非 Windows 桌面通知（macOS `osascript` / Linux `notify-send`）
-- [ ] i18n（接入 `ctx.locale` 字典）

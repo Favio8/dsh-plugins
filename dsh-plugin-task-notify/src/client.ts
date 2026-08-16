@@ -6,8 +6,14 @@ import { disposeToasts, pushToast, setOpenSession, ToastStack } from './client/t
 import { watchCompletions } from './client/watcher'
 import { TaskNotifySettings, TaskNotifySection } from './client/settings'
 import { injectStyles } from './client/styles'
+import { DICTS, NS, setTranslator, t } from './client/locales'
 
-export const inject = ['sessions', 'slots']
+export const inject = ['sessions', 'slots', 'locale']
+
+interface LocaleFace {
+  bind(ns: string): (key: string, params?: Record<string, string | number>) => string
+  register(ns: string, dicts: Record<string, Record<string, string>>): () => void
+}
 
 /**
  * dsh-plugin-task-notify — 任务完成通知（Client 半）。
@@ -26,6 +32,13 @@ export function apply(ctx: Context): void {
 
   const sessions = ctx.get('sessions') as unknown as SessionsFace
   const slots = ctx.get('slots') as unknown as SlotsFace
+  const locale = ctx.get('locale') as LocaleFace | undefined
+
+  if (locale !== undefined) {
+    const translate = locale.bind(NS)
+    setTranslator((key, params) => (params !== undefined ? translate(key, params) : translate(key)))
+    ctx.effect(() => locale.register(NS, DICTS), 'task-notify: dictionaries')
+  }
 
   // 点击应用内 toast → 打开对应会话
   setOpenSession((sessionId) => {
@@ -42,15 +55,15 @@ export function apply(ctx: Context): void {
     (info) => {
       const cfg = getConfig()
       if (!cfg.toast) return
-      const title = info.title !== '' ? info.title : '未命名会话'
-      pushToast({ title, body: '任务完成', sessionId: info.sessionId })
+      const title = info.title !== '' ? info.title : t('toast.untitled')
+      pushToast({ title, body: t('toast.done'), sessionId: info.sessionId })
     },
     // 等待用户输入/审批（pendingInteraction 出现）→ toast 提示
     (info) => {
       const cfg = getConfig()
       if (!cfg.toast) return
-      const title = info.title !== '' ? info.title : '未命名会话'
-      pushToast({ title, body: '等待你的输入/审批', sessionId: info.sessionId })
+      const title = info.title !== '' ? info.title : t('toast.untitled')
+      pushToast({ title, body: t('toast.wait'), sessionId: info.sessionId })
     },
   )
   ctx.effect(() => unwatch)
@@ -68,7 +81,7 @@ export function apply(ctx: Context): void {
   // 完整设置页（设置导航新增「任务完成通知」；label 用 thunk，与官方设置页写法一致）
   slots.inject('settings.section', () =>
     slots.register(
-      { name: 'settings.section', id: 'task-notify', order: 25, label: () => '任务完成通知' },
+      { name: 'settings.section', id: 'task-notify', order: 25, label: () => t('settings.title') },
       TaskNotifySection,
     ),
   )

@@ -58,8 +58,8 @@ const inject = exportsObj.inject
 const apply = exportsObj.apply
 console.log('✓ exports:', Object.keys(exportsObj).join(', '))
 console.log('✓ inject =', JSON.stringify(inject))
-if (!Array.isArray(inject) || inject.join(',') !== 'sessions,slots') {
-  console.error('FAIL: inject 不是 ["sessions","slots"]')
+if (!Array.isArray(inject) || inject.join(',') !== 'sessions,slots,locale') {
+  console.error('FAIL: inject 不是 ["sessions","slots","locale"]')
   process.exit(1)
 }
 if (typeof apply !== 'function') {
@@ -80,7 +80,12 @@ const ctxStub = {
     const cleanup = cb()
     return () => { if (typeof cleanup === 'function') cleanup() }
   },
-  get: (name) => (name === 'sessions' ? sessionsStub : name === 'slots' ? slotsStub : undefined),
+  get: (name) => {
+    if (name === 'sessions') return sessionsStub
+    if (name === 'slots') return slotsStub
+    if (name === 'locale') return { bind: () => () => '', register: () => () => {} }
+    return undefined
+  },
 }
 const slotsStub = {
   inject: (key, cb) => { cb(); return () => {} },

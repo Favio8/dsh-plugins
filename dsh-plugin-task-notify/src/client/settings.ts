@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { getConfig, setConfig, subscribeConfig } from './config'
+import { t } from './locales'
 import { pushToast } from './toasts'
 
 /** 宿主侧配置（~/.dsh/plugins/task-notify.json），经 /task-notify/* HTTP 桥读写。 */
@@ -14,12 +15,13 @@ interface HostConfig {
   sound: boolean
   soundType: string
   volume: number
+  errorNotify: boolean
   supported?: boolean
 }
 
-const THEME_OPTIONS = [
-  { value: 'dark', label: '深色' },
-  { value: 'light', label: '浅色' },
+const themeOptions = (): { value: string; label: string }[] => [
+  { value: 'dark', label: t('options.theme.dark') },
+  { value: 'light', label: t('options.theme.light') },
 ]
 
 const ACCENT_COLORS: Record<string, string> = {
@@ -29,40 +31,40 @@ const ACCENT_COLORS: Record<string, string> = {
   purple: '#9B6FE8',
 }
 
-const POSITION_OPTIONS = [
-  { value: 'br', label: '右下' },
-  { value: 'bl', label: '左下' },
-  { value: 'tr', label: '右上' },
-  { value: 'tl', label: '左上' },
+const positionOptions = (): { value: string; label: string }[] => [
+  { value: 'br', label: t('options.position.br') },
+  { value: 'bl', label: t('options.position.bl') },
+  { value: 'tr', label: t('options.position.tr') },
+  { value: 'tl', label: t('options.position.tl') },
 ]
 
-const DURATION_OPTIONS = [
-  { value: 4, label: '4 秒' },
-  { value: 6, label: '6 秒' },
-  { value: 8, label: '8 秒' },
-  { value: 10, label: '10 秒' },
+const durationOptions = (): { value: number; label: string }[] => [
+  { value: 4, label: t('options.duration.4') },
+  { value: 6, label: t('options.duration.6') },
+  { value: 8, label: t('options.duration.8') },
+  { value: 10, label: t('options.duration.10') },
 ]
 
-const FONT_SIZE_OPTIONS = [
-  { value: 11, label: '小' },
-  { value: 12, label: '标准' },
-  { value: 13, label: '大' },
-  { value: 14, label: '特大' },
+const fontSizeOptions = (): { value: number; label: string }[] => [
+  { value: 11, label: t('options.fontSize.11') },
+  { value: 12, label: t('options.fontSize.12') },
+  { value: 13, label: t('options.fontSize.13') },
+  { value: 14, label: t('options.fontSize.14') },
 ]
 
-const FONT_OPTIONS = [
-  { value: 'Microsoft YaHei UI', label: '微软雅黑' },
-  { value: 'Segoe UI', label: '系统默认' },
-  { value: 'SimSun', label: '宋体' },
-  { value: 'SimHei', label: '黑体' },
-  { value: 'KaiTi', label: '楷体' },
+const fontOptions = (): { value: string; label: string }[] => [
+  { value: 'Microsoft YaHei UI', label: t('options.font.yahei') },
+  { value: 'Segoe UI', label: t('options.font.default') },
+  { value: 'SimSun', label: t('options.font.simsun') },
+  { value: 'SimHei', label: t('options.font.simhei') },
+  { value: 'KaiTi', label: t('options.font.kaiti') },
 ]
 
-const SOUND_TYPE_OPTIONS = [
-  { value: 'apple', label: '苹果三全音' },
-  { value: 'ding', label: '叮' },
-  { value: 'double', label: '双响' },
-  { value: 'system', label: '系统提示音' },
+const soundTypeOptions = (): { value: string; label: string }[] => [
+  { value: 'apple', label: t('options.sound.apple') },
+  { value: 'ding', label: t('options.sound.ding') },
+  { value: 'double', label: t('options.sound.double') },
+  { value: 'system', label: t('options.sound.system') },
 ]
 
 async function fetchHostConfig(): Promise<HostConfig | null> {
@@ -132,7 +134,7 @@ function useHostConfig(): [HostConfig | null, (patch: Partial<HostConfig>) => vo
 /** 按当前开关触发测试（桌面卡片 + 应用内 toast）。 */
 function fireTest(host: HostConfig | null, toastOn: boolean): void {
   if (toastOn) {
-    pushToast({ title: '这是一条测试通知', body: '任务完成通知（测试）' })
+    pushToast({ title: t('settings.testToastTitle'), body: t('settings.testToastBody') })
   }
   if (host?.desktop === true || host?.sound === true) {
     void fetch('/task-notify/test', { method: 'POST' }).catch(() => {
@@ -207,11 +209,11 @@ export function TaskNotifySettings(): React.ReactElement {
     React.createElement(
       'div',
       { className: 'tn-row-head' },
-      React.createElement('span', { className: 'tn-row-title' }, '任务完成通知'),
+      React.createElement('span', { className: 'tn-row-title' }, t('settings.title')),
       React.createElement(
         'button',
         { type: 'button', className: 'tn-btn', onClick: () => fireTest(host, cfg.toast) },
-        '测试',
+        t('settings.test'),
       ),
     ),
     React.createElement(
@@ -220,8 +222,8 @@ export function TaskNotifySettings(): React.ReactElement {
       React.createElement(
         'div',
         { className: 'tn-field-label' },
-        React.createElement('span', null, '桌面通知'),
-        React.createElement('span', { className: 'tn-field-sub' }, '独立于浏览器，页面关闭也能收到'),
+        React.createElement('span', null, t('field.desktop')),
+        React.createElement('span', { className: 'tn-field-sub' }, t('field.desktopSub')),
       ),
       React.createElement(Toggle, {
         checked: host?.desktop === true,
@@ -235,8 +237,8 @@ export function TaskNotifySettings(): React.ReactElement {
       React.createElement(
         'div',
         { className: 'tn-field-label' },
-        React.createElement('span', null, '应用内提示'),
-        React.createElement('span', { className: 'tn-field-sub' }, '页面右下角 toast'),
+        React.createElement('span', null, t('field.toast')),
+        React.createElement('span', { className: 'tn-field-sub' }, t('field.toastSub')),
       ),
       React.createElement(Toggle, { checked: cfg.toast, onChange: (v) => setConfig({ toast: v }) }),
     ),
@@ -246,8 +248,8 @@ export function TaskNotifySettings(): React.ReactElement {
       React.createElement(
         'div',
         { className: 'tn-field-label' },
-        React.createElement('span', null, '提示音'),
-        React.createElement('span', { className: 'tn-field-sub' }, '任务完成时播放'),
+        React.createElement('span', null, t('field.sound')),
+        React.createElement('span', { className: 'tn-field-sub' }, t('field.soundSub')),
       ),
       React.createElement(Toggle, {
         checked: host?.sound === true,
@@ -255,7 +257,22 @@ export function TaskNotifySettings(): React.ReactElement {
         disabled: host === null,
       }),
     ),
-    React.createElement('div', { className: 'tn-row-foot' }, '卡片样式、字体与音色在设置页「任务完成通知」中调整'),
+    React.createElement(
+      'div',
+      { className: 'tn-field' },
+      React.createElement(
+        'div',
+        { className: 'tn-field-label' },
+        React.createElement('span', null, t('field.error')),
+        React.createElement('span', { className: 'tn-field-sub' }, t('field.errorSub')),
+      ),
+      React.createElement(Toggle, {
+        checked: host?.errorNotify === true,
+        onChange: (v) => patchHost({ errorNotify: v }),
+        disabled: host === null,
+      }),
+    ),
+    React.createElement('div', { className: 'tn-row-foot' }, t('row.foot')),
   )
 }
 
@@ -269,30 +286,30 @@ export function TaskNotifySection(_props: { close: () => void }): React.ReactEle
   const [host, patchHost] = useHostConfig()
 
   const supported = host?.supported !== false
-  const hint = host === null ? '正在连接…' : supported ? null : '桌面通知仅支持 Windows'
+  const hint = host === null ? t('settings.connecting') : supported ? null : t('settings.windowsOnly')
 
   return React.createElement(
     'div',
     { className: 'tn-page' },
-    React.createElement('div', { className: 'tn-page-title' }, '任务完成通知'),
+    React.createElement('div', { className: 'tn-page-title' }, t('settings.title')),
     React.createElement(
       'div',
       { className: 'tn-page-desc' },
-      '会话一轮任务结束时提醒你；桌面卡片为自绘置顶窗口，不依赖系统通知开关。',
+      t('page.desc'),
     ),
 
     React.createElement(
       'div',
       { className: 'tn-card' },
-      React.createElement('div', { className: 'tn-card-title' }, '通知通道'),
+      React.createElement('div', { className: 'tn-card-title' }, t('card.channels')),
       React.createElement(
         'div',
         { className: 'tn-field' },
         React.createElement(
           'div',
           { className: 'tn-field-label' },
-          React.createElement('span', null, '桌面通知'),
-          React.createElement('span', { className: 'tn-field-sub' }, '独立于浏览器，页面关闭也能收到'),
+          React.createElement('span', null, t('field.desktop')),
+          React.createElement('span', { className: 'tn-field-sub' }, t('field.desktopSub')),
         ),
         React.createElement(Toggle, {
           checked: host?.desktop === true,
@@ -306,24 +323,39 @@ export function TaskNotifySection(_props: { close: () => void }): React.ReactEle
         React.createElement(
           'div',
           { className: 'tn-field-label' },
-          React.createElement('span', null, '应用内提示'),
-          React.createElement('span', { className: 'tn-field-sub' }, '页面右下角 toast'),
+          React.createElement('span', null, t('field.toast')),
+          React.createElement('span', { className: 'tn-field-sub' }, t('field.toastSub')),
         ),
         React.createElement(Toggle, { checked: cfg.toast, onChange: (v) => setConfig({ toast: v }) }),
+      ),
+      React.createElement(
+        'div',
+        { className: 'tn-field' },
+        React.createElement(
+          'div',
+          { className: 'tn-field-label' },
+          React.createElement('span', null, t('field.error')),
+          React.createElement('span', { className: 'tn-field-sub' }, t('field.errorSub')),
+        ),
+        React.createElement(Toggle, {
+          checked: host?.errorNotify === true,
+          onChange: (v) => patchHost({ errorNotify: v }),
+          disabled: host === null,
+        }),
       ),
     ),
 
     React.createElement(
       'div',
       { className: 'tn-card' },
-      React.createElement('div', { className: 'tn-card-title' }, '卡片样式'),
+      React.createElement('div', { className: 'tn-card-title' }, t('card.style')),
       React.createElement(
         'div',
         { className: 'tn-field' },
-        React.createElement('div', { className: 'tn-field-label' }, '主题'),
+        React.createElement('div', { className: 'tn-field-label' }, t('field.theme')),
         React.createElement(Segmented, {
           value: host?.theme ?? 'dark',
-          options: THEME_OPTIONS,
+          options: themeOptions(),
           onChange: (v) => patchHost({ theme: String(v) }),
           disabled: host === null,
         }),
@@ -331,7 +363,7 @@ export function TaskNotifySection(_props: { close: () => void }): React.ReactEle
       React.createElement(
         'div',
         { className: 'tn-field' },
-        React.createElement('div', { className: 'tn-field-label' }, '强调色'),
+        React.createElement('div', { className: 'tn-field-label' }, t('field.accent')),
         React.createElement(Swatches, {
           value: host?.accent ?? 'green',
           onChange: (v) => patchHost({ accent: v }),
@@ -341,10 +373,10 @@ export function TaskNotifySection(_props: { close: () => void }): React.ReactEle
       React.createElement(
         'div',
         { className: 'tn-field' },
-        React.createElement('div', { className: 'tn-field-label' }, '位置'),
+        React.createElement('div', { className: 'tn-field-label' }, t('field.position')),
         React.createElement(Segmented, {
           value: host?.position ?? 'br',
-          options: POSITION_OPTIONS,
+          options: positionOptions(),
           onChange: (v) => patchHost({ position: String(v) }),
           disabled: host === null,
         }),
@@ -352,10 +384,10 @@ export function TaskNotifySection(_props: { close: () => void }): React.ReactEle
       React.createElement(
         'div',
         { className: 'tn-field' },
-        React.createElement('div', { className: 'tn-field-label' }, '显示时长'),
+        React.createElement('div', { className: 'tn-field-label' }, t('field.duration')),
         React.createElement(Segmented, {
           value: host?.durationSec ?? 6,
-          options: DURATION_OPTIONS,
+          options: durationOptions(),
           onChange: (v) => patchHost({ durationSec: Number(v) }),
           disabled: host === null,
         }),
@@ -365,14 +397,14 @@ export function TaskNotifySection(_props: { close: () => void }): React.ReactEle
     React.createElement(
       'div',
       { className: 'tn-card' },
-      React.createElement('div', { className: 'tn-card-title' }, '字体'),
+      React.createElement('div', { className: 'tn-card-title' }, t('card.font')),
       React.createElement(
         'div',
         { className: 'tn-field' },
-        React.createElement('div', { className: 'tn-field-label' }, '字号'),
+        React.createElement('div', { className: 'tn-field-label' }, t('field.fontSize')),
         React.createElement(Segmented, {
           value: host?.fontSize ?? 12,
-          options: FONT_SIZE_OPTIONS,
+          options: fontSizeOptions(),
           onChange: (v) => patchHost({ fontSize: Number(v) }),
           disabled: host === null,
         }),
@@ -380,7 +412,7 @@ export function TaskNotifySection(_props: { close: () => void }): React.ReactEle
       React.createElement(
         'div',
         { className: 'tn-field' },
-        React.createElement('div', { className: 'tn-field-label' }, '字体'),
+        React.createElement('div', { className: 'tn-field-label' }, t('field.fontFamily')),
         React.createElement(
           'select',
           {
@@ -389,7 +421,7 @@ export function TaskNotifySection(_props: { close: () => void }): React.ReactEle
             disabled: host === null,
             onChange: (e: React.ChangeEvent<HTMLSelectElement>) => patchHost({ fontFamily: e.target.value }),
           },
-          FONT_OPTIONS.map((f) => React.createElement('option', { key: f.value, value: f.value }, f.label)),
+          fontOptions().map((f) => React.createElement('option', { key: f.value, value: f.value }, f.label)),
         ),
       ),
     ),
@@ -397,15 +429,15 @@ export function TaskNotifySection(_props: { close: () => void }): React.ReactEle
     React.createElement(
       'div',
       { className: 'tn-card' },
-      React.createElement('div', { className: 'tn-card-title' }, '提示音'),
+      React.createElement('div', { className: 'tn-card-title' }, t('card.sound')),
       React.createElement(
         'div',
         { className: 'tn-field' },
         React.createElement(
           'div',
           { className: 'tn-field-label' },
-          React.createElement('span', null, '开启提示音'),
-          React.createElement('span', { className: 'tn-field-sub' }, '任务完成时播放，独立于浏览器'),
+          React.createElement('span', null, t('field.soundEnable')),
+          React.createElement('span', { className: 'tn-field-sub' }, t('field.soundEnableSub')),
         ),
         React.createElement(Toggle, {
           checked: host?.sound === true,
@@ -416,10 +448,10 @@ export function TaskNotifySection(_props: { close: () => void }): React.ReactEle
       React.createElement(
         'div',
         { className: 'tn-field' },
-        React.createElement('div', { className: 'tn-field-label' }, '提示音'),
+        React.createElement('div', { className: 'tn-field-label' }, t('field.soundType')),
         React.createElement(Segmented, {
           value: host?.soundType ?? 'apple',
-          options: SOUND_TYPE_OPTIONS,
+          options: soundTypeOptions(),
           onChange: (v) => patchHost({ soundType: String(v) }),
           disabled: host === null,
         }),
@@ -430,9 +462,9 @@ export function TaskNotifySection(_props: { close: () => void }): React.ReactEle
         React.createElement(
           'div',
           { className: 'tn-field-label' },
-          React.createElement('span', null, '音量'),
+          React.createElement('span', null, t('field.volume')),
           host?.soundType === 'system'
-            ? React.createElement('span', { className: 'tn-field-sub' }, '系统提示音不支持调节')
+            ? React.createElement('span', { className: 'tn-field-sub' }, t('field.volumeFixedSub'))
             : null,
         ),
         React.createElement(VolumeSlider, {
@@ -449,7 +481,7 @@ export function TaskNotifySection(_props: { close: () => void }): React.ReactEle
       React.createElement(
         'button',
         { type: 'button', className: 'tn-btn tn-btn-primary', onClick: () => fireTest(host, cfg.toast) },
-        '测试通知',
+        t('settings.testButton'),
       ),
       hint !== null ? React.createElement('span', { className: 'tn-settings-hint' }, hint) : null,
     ),

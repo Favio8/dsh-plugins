@@ -47,6 +47,8 @@ interface NotifyConfig {
   soundType: string
   /** 提示音音量 0..100 */
   volume: number
+  /** 任务失败（agent/error）也弹红色错误卡片 */
+  errorNotify: boolean
 }
 
 const DEFAULTS: NotifyConfig = {
@@ -60,6 +62,7 @@ const DEFAULTS: NotifyConfig = {
   sound: true,
   soundType: 'apple',
   volume: 80,
+  errorNotify: true,
 }
 
 function isOneOf<T extends string | number>(value: unknown, list: readonly T[]): value is T {
@@ -82,6 +85,7 @@ function sanitizeConfig(raw: unknown): NotifyConfig {
       typeof src.volume === 'number' && Number.isFinite(src.volume)
         ? Math.max(0, Math.min(100, Math.round(src.volume)))
         : DEFAULTS.volume,
+    errorNotify: typeof src.errorNotify === 'boolean' ? src.errorNotify : DEFAULTS.errorNotify,
   }
 }
 
@@ -137,6 +141,7 @@ interface AgentEvents {
     name: 'approval/request',
     listener: (req: ApprovalRequestLike, next: () => Promise<unknown>) => Promise<unknown> | unknown,
   ): () => void
+  on(name: 'agent/error', listener: (payload: { agent: AgentLike; error: unknown }) => void): () => void
 }
 
 const DSH_HOME = process.env.DSH_HOME ?? join(homedir(), '.dsh')
@@ -154,6 +159,13 @@ const MAX_JSON_BODY_BYTES = 64 * 1024
 /** 会话标题过长时截断，避免卡片溢出。 */
 function truncateTitle(title: string, max = 26): string {
   return title.length > max ? `${title.slice(0, max)}…` : title
+}
+
+/** 从 agent/error 的 unknown error 提取可读摘要。 */
+function errorSummary(error: unknown): string {
+  if (error instanceof Error && error.message !== '') return error.message
+  if (typeof error === 'string' && error !== '') return error
+  return '未知错误'
 }
 
 /** 阻塞等待用户输入/审批的工具：出现 tool/call 即代表等待开始。 */
@@ -250,6 +262,7 @@ switch ($Accent) {
   'blue'   { $accentColor = [System.Drawing.Color]::FromArgb(74, 144, 217) }
   'orange' { $accentColor = [System.Drawing.Color]::FromArgb(232, 161, 61) }
   'purple' { $accentColor = [System.Drawing.Color]::FromArgb(155, 111, 232) }
+  'red'    { $accentColor = [System.Drawing.Color]::FromArgb(224, 82, 82) }
   default  { $accentColor = [System.Drawing.Color]::FromArgb(87, 180, 120) }
 }
 
@@ -430,6 +443,7 @@ function showPopup(
   url: string = WEB_URL,
   soundOn: boolean = false,
   soundType: string = 'apple',
+  accent: string = config.accent,
 ): void {
   if (process.platform !== 'win32') return
   const scriptPath = join(
@@ -459,7 +473,7 @@ function showPopup(
         text,
         url,
         config.theme,
-        config.accent,
+        accent,
         config.position,
         String(config.durationSec),
         String(config.fontSize),
@@ -532,6 +546,7 @@ export function apply(ctx: Context): void {
     | undefined
   const running = new Map<string, boolean>()
   let lastNotifyAt = 0
+  let lastErrorAt = 0
   const fireWaitNotify = createWaitNotifier()
   const events = ctx as unknown as AgentEvents
 
@@ -556,6 +571,23 @@ export function apply(ctx: Context): void {
     const title = truncateTitle(sessionTitle?.get(agent.session)?.title ?? 'DSH 会话')
     if (config.desktop) {
       showPopup('DSH 任务完成', `「${title}」已完成`, WEB_URL, config.sound, config.soundType)
+    } else if (config.sound) {
+      playSoundOnly(config.soundType)
+    }
+  })
+
+  // ── 任务失败检测：agent/error → 红色错误卡片（独立防抖） ──
+  events.on('agent/error', (payload) => {
+    if (isSubagentSession(payload.agent.session)) return
+    if (!config.errorNotify) return
+    if (!config.desktop && !config.sound) return
+    const now = Date.now()
+    if (now - lastErrorAt < DEBOUNCE_MS) return
+    lastErrorAt = now
+    const title = truncateTitle(sessionTitle?.get(payload.agent.session)?.title ?? 'DSH 会话')
+    const message = truncateTitle(errorSummary(payload.error), 60)
+    if (config.desktop) {
+      showPopup('DSH 任务出错', `「${title}」执行出错：${message}`, WEB_URL, config.sound, config.soundType, 'red')
     } else if (config.sound) {
       playSoundOnly(config.soundType)
     }
@@ -629,6 +661,7 @@ export function apply(ctx: Context): void {
               sound: true,
               soundType: true,
               volume: true,
+              errorNotify: true,
             }
             for (const key of keys) {
               if (!Object.hasOwn(known, key)) {
@@ -659,7 +692,9 @@ export function apply(ctx: Context): void {
                                 ? typeof value === 'boolean'
                                 : key === 'soundType'
                                   ? isOneOf(value, SOUND_TYPES)
-                                  : typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100
+                                  : key === 'errorNotify'
+                                    ? typeof value === 'boolean'
+                                    : typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100
               if (!valid) {
                 sendJson(res, 400, { ok: false, error: `非法值: ${key}` })
                 return
